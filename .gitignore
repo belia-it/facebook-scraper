@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment Variables & Credentials (CRITICAL)
+.env
+credentials.json
+facebook_auth.json
+facebook_cookies.txt
+storage_state.json
+
+# Local logs and temporary files
+*.log
+vps_check.png
+vps_error.png
+*.png
+debug_vps.*
+
+# Data files (Excel/CSV)
+*.xlsx
+*.xls
+*.csv
+
+# IDEs and OS files
+.DS_Store
+.idea/
+.vscode/
+.vincent/
+.python-version

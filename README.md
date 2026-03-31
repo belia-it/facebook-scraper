@@ -4,6 +4,27 @@ This guide provides instructions for setting up, configuring, and running the Fa
 
 ---
 
+## 🏗️ Architecture Overview
+
+The following diagram illustrates how the scraper interacts with Facebook and Google Sheets:
+
+```mermaid
+graph TD
+    A[Cron Job / Manual Run] --> B[Playwright Browser]
+    B --> C{Authentication}
+    C -- Valid Session --> D[Navigate to Group URL]
+    C -- Expired/Modal --> E[Bypass Modal / Manual Refresh]
+    D --> F[Scroll Feed]
+    F --> G[Intercept GraphQL Responses]
+    G --> H[Parse Post Data]
+    H --> I[Check for Uniqueness]
+    I -- New Posts --> J[Gspread API]
+    J --> K[Update Google Sheet]
+    K --> L[Save Refreshed Session]
+```
+
+---
+
 ## 🛠️ Prerequisites
 
 - **Python 3.8+**
@@ -21,10 +42,16 @@ This guide provides instructions for setting up, configuring, and running the Fa
    ```
 
 2. **Create and activate a virtual environment**:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
+   - **Mac/Linux**:
+     ```bash
+     python3 -m venv venv
+     source venv/bin/activate
+     ```
+   - **Windows (PowerShell)**:
+     ```powershell
+     python -m venv venv
+     .\venv\Scripts\activate
+     ```
 
 3. **Install dependencies**:
    ```bash
@@ -87,11 +114,12 @@ On the VPS, run:
 ```
 *The script will launch a headless browser and wait for 3 minutes.*
 
-### Step 2: Establish an SSH Tunnel from your Local Mac
-On your local machine, run:
+### Step 2: Establish an SSH Tunnel from your Local Machine
+Run this command from your local terminal (Mac/Linux Bash or Windows PowerShell/CMD):
 ```bash
 ssh -L 9222:127.0.0.1:9222 user@your_vps_ip
 ```
+*Note for Windows users: If the `ssh` command is not recognized, ensure **OpenSSH Client** is enabled in Windows Optional Features.*
 
 ### Step 3: Log in via your Local Browser
 1.  Open Chrome/Edge on your local machine.
@@ -105,10 +133,16 @@ ssh -L 9222:127.0.0.1:9222 user@your_vps_ip
 ## 🚀 5. Running the Scraper
 
 ### Manual Run (Local or VPS)
-```bash
-source venv/bin/activate
-python scraper_playwright.py
-```
+- **Mac/Linux**:
+  ```bash
+  source venv/bin/activate
+  python3 scraper_playwright.py
+  ```
+- **Windows**:
+  ```powershell
+  .\venv\Scripts\activate
+  python scraper_playwright.py
+  ```
 
 ### Remote VPS Deployment
 Use the `deploy.sh` script to sync changes from your local machine to the VPS:
@@ -118,15 +152,22 @@ Use the `deploy.sh` script to sync changes from your local machine to the VPS:
 
 ---
 
-## ⏲️ 6. Automation (Cron Job)
+## ⏲️ 6. Automation
 
-To run the scraper automatically on the VPS (e.g., every 45 minutes), add a cron job:
+### Linux/Mac (Cron Job)
+To run the scraper automatically on the VPS (e.g., every 45 minutes):
 
 1.  Open crontab: `crontab -e`
 2.  Add the following line (replace paths as needed):
     ```cron
     */45 * * * * cd /home/houcem/facebook-scraper && ./venv/bin/python scraper_playwright.py >> /home/houcem/facebook-scraper/cron.log 2>&1
     ```
+
+### Windows (Task Scheduler)
+On Windows, use **Task Scheduler** to trigger the script:
+1.  **Program/script**: `C:\path\to\facebook-scraper\venv\Scripts\python.exe`
+2.  **Add arguments**: `scraper_playwright.py`
+3.  **Start in**: `C:\path\to\facebook-scraper\`
 
 ---
 

@@ -1,6 +1,7 @@
 import time
 import datetime
 import gspread
+import hashlib
 import os
 import json
 import re
@@ -20,6 +21,15 @@ SHEET_NAME = os.getenv("SHEET_NAME", "covoiturage report")
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", os.path.join(SCRIPT_DIR, "credentials.json"))
 STORAGE_STATE = os.getenv("STORAGE_STATE", os.path.join(SCRIPT_DIR, "facebook_auth.json"))
 TIMEZONE_OFFSET = int(os.getenv("TIMEZONE_OFFSET", "1")) # Default to UTC+1 for user
+MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "50"))
+AGE_LIMIT_MINUTES = int(os.getenv("AGE_LIMIT_MINUTES", "59"))
+
+SHEET_HEADERS = [
+    "post_url", "post_time", "post_date", "calendar_week", "weekday", "profile_name",
+    "gender", "offer_or_demand", "from_city", "from_area", "to_city", "to_area",
+    "preferred_departure_time", "price", "nr_passengers", "post_text",
+    "post_text_english", "post_text_french", "scrape_timestamp"
+]
 
 # --- JSON PARSING HELPERS ---
 
@@ -45,7 +55,8 @@ def extract_data_blocks(raw_text):
             try:
                 block = json.loads(raw_text[brace_start:end_idx+1])
                 blocks.append(block)
-            except: pass
+            except json.JSONDecodeError as e:
+                print(f"   [Warning] Malformed JSON block at offset {brace_start}: {e}")
             i = end_idx + 1
         else: break
     return blocks
@@ -80,37 +91,65 @@ def parse_facebook_date(date_str, ref_time=None):
 
     ds = date_str.lower().strip()
     months = {
+        # French
         'janvier': 1, 'février': 2, 'mars': 3, 'avril': 4, 'mai': 5, 'juin': 6,
         'juillet': 7, 'août': 8, 'septembre': 9, 'octobre': 10, 'novembre': 11, 'décembre': 12,
-        'janv': 1, 'févr': 2, 'sept': 9, 'oct': 10, 'nov': 11, 'déc': 12
+        'janv': 1, 'févr': 2, 'sept': 9, 'oct': 10, 'nov': 11, 'déc': 12,
+        # English
+        'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+        'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'nov': 11, 'dec': 12,
     }
+    all_month_names = '|'.join(months.keys())
 
     try:
-        # 1. Exact tooltip format "5 mars 2026 à 06:42"
-        exact = re.search(r'(\d{1,2})\s+(janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre)\s+(\d{4})\s+à\s+(\d{1,2}):(\d{2})', ds)
-        if exact:
-            day, m_name, year, h, m = exact.groups()
+        # 0. "Just now" / "A l'instant"
+        if ds in ('just now', 'now') or "l'instant" in ds:
+            return ref_time.strftime('%Y-%m-%d'), ref_time.strftime('%H:%M:%S'), date_str
+
+        # 1. French exact format "5 mars 2026 à 06:42"
+        exact_fr = re.search(r'(\d{1,2})\s+(' + all_month_names + r')\s+(\d{4})\s+[àa]\s+(\d{1,2}):(\d{2})', ds)
+        if exact_fr:
+            day, m_name, year, h, m = exact_fr.groups()
             target = datetime.datetime(int(year), months[m_name], int(day), int(h), int(m))
             return target.strftime('%Y-%m-%d'), target.strftime('%H:%M:%S'), date_str
 
-        # 2. Relative time "8 min", "8 m", "3 h", "1 j"
-        rel = re.search(r'(\d+)\s*(min|m|h|heure|heures|j|jour|jours)\b', ds)
+        # 1b. English exact format "March 5, 2026 at 06:42"
+        exact_en = re.search(r'(' + all_month_names + r')\s+(\d{1,2}),?\s+(\d{4})\s+at\s+(\d{1,2}):(\d{2})', ds)
+        if exact_en:
+            m_name, day, year, h, m = exact_en.groups()
+            target = datetime.datetime(int(year), months[m_name], int(day), int(h), int(m))
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M:%S'), date_str
+
+        # 2. Relative time "8 min", "8 mins", "3 hours", "1 jour", "30 seconds", etc.
+        rel = re.search(r'(\d+)\s*(minutes?|mins?|m|hours?|heures?|h|jours?|j|days?|d|seconds?|s)\b', ds)
         if rel:
             val, unit = rel.groups()
             val = int(val)
-            if unit in ['min', 'm']: target = ref_time - datetime.timedelta(minutes=val)
-            elif unit in ['h', 'heure', 'heures']: target = ref_time - datetime.timedelta(hours=val)
-            elif unit in ['j', 'jour', 'jours']: target = ref_time - datetime.timedelta(days=val)
-            else: target = ref_time
+            if unit in ['min', 'mins', 'minute', 'minutes', 'm']:
+                target = ref_time - datetime.timedelta(minutes=val)
+            elif unit in ['h', 'hour', 'hours', 'heure', 'heures']:
+                target = ref_time - datetime.timedelta(hours=val)
+            elif unit in ['j', 'jour', 'jours', 'd', 'day', 'days']:
+                target = ref_time - datetime.timedelta(days=val)
+            elif unit in ['s', 'second', 'seconds']:
+                target = ref_time - datetime.timedelta(seconds=val)
+            else:
+                target = ref_time
             return target.strftime('%Y-%m-%d'), target.strftime('%H:%M:%S'), date_str
 
-        if 'hier' in ds:
+        # 3. "Yesterday" / "Hier" with optional time
+        if 'hier' in ds or 'yesterday' in ds:
             time_match = re.search(r'(\d{1,2})[:h](\d{2})', ds)
             if time_match:
                 h, m = time_match.groups()
                 target = (ref_time - datetime.timedelta(days=1)).replace(hour=int(h), minute=int(m), second=0)
-                return target.strftime('%Y-%m-%d'), target.strftime('%H:%M:%S'), date_str
-    except: pass
+            else:
+                target = ref_time - datetime.timedelta(days=1)
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M:%S'), date_str
+    except Exception as e:
+        print(f"   [Warning] Date parsing failed for '{date_str}': {e}")
 
     return None, None, date_str
 
@@ -125,6 +164,14 @@ def main():
         client = gspread.authorize(creds)
         sheet = client.open(SHEET_NAME).worksheet("Feuille 1")
         print("✅ Connected to Sheets.")
+        # Ensure header row exists for translate_posts.py compatibility
+        existing_rows = sheet.get_all_values()
+        if not existing_rows:
+            sheet.append_row(SHEET_HEADERS)
+            print("   Added header row to empty sheet.")
+        elif existing_rows[0] != SHEET_HEADERS:
+            sheet.insert_row(SHEET_HEADERS, index=1)
+            print("   Inserted header row (existing data had no headers).")
     except Exception as e:
         print(f"❌ Sheets Error: {e}")
         return
@@ -155,21 +202,30 @@ def main():
 
                 blocks = parse_fb_response(text)
                 
+                STORY_TYPENAMES = {"Story", "FeedUnit", "GroupFeedStory", "GroupPost", "UserPost", "FeedStory", "GroupCommerceProductItem"}
+                TIME_FIELDS = {"creation_time", "timestamp", "publish_time", "created_time", "publish_timestamp", "created_timestamp"}
+
                 def find_stories(obj):
                     found = []
                     if isinstance(obj, dict):
-                        # Heuristic: A Story usually has __typename=="Story" OR has both creation/timestamp AND actors
                         typename = obj.get("__typename")
-                        has_time = any(k in obj for k in ["creation_time", "timestamp", "publish_time"])
-                        has_actors = "actors" in obj and isinstance(obj["actors"], list)
-                        
-                        is_story = typename == "Story"
+                        has_time = any(k in obj for k in TIME_FIELDS)
+                        has_actors = (
+                            ("actors" in obj and isinstance(obj["actors"], list)) or
+                            ("actor" in obj and isinstance(obj["actor"], dict)) or
+                            ("author" in obj and isinstance(obj["author"], dict))
+                        )
+                        has_post_id = "post_id" in obj or ("id" in obj and isinstance(obj.get("id"), str))
+
+                        is_story = typename in STORY_TYPENAMES
                         if not is_story and (has_time and has_actors):
                             is_story = True
-                        
+                        if not is_story and (has_time and has_post_id):
+                            is_story = True
+
                         if is_story:
                             found.append(obj)
-                        
+
                         for v in obj.values():
                             found.extend(find_stories(v))
                     elif isinstance(obj, list):
@@ -198,12 +254,12 @@ def main():
                     # (handled by recursion below but with smarter checks)
                     
                     # Search for 'text' but ignore very short strings if they look like metadata
+                    FB_INTERNAL_LABELS = {"S", "e", "·", "J\u2019aime", "Commenter", "Partager", "Like", "Comment", "Share"}
                     def check_text(obj):
                         if isinstance(obj, dict):
                             if "text" in obj and isinstance(obj["text"], str):
                                 t = obj["text"].strip()
-                                # Ignore single chars or common FB internal labels
-                                if len(t) > 1 and t not in ["S", "e", "·"]:
+                                if len(t) >= 1 and t not in FB_INTERNAL_LABELS:
                                     return t
                             for v in obj.values():
                                 res = check_text(v)
@@ -216,7 +272,7 @@ def main():
                     return check_text(s)
 
                 def find_actual_user(s):
-                    # Look for actors list
+                    # Try actors list
                     actors = find_key_recursive(s, "actors")
                     if actors and isinstance(actors, list) and len(actors) > 0:
                         first_actor = actors[0]
@@ -224,6 +280,18 @@ def main():
                             name = first_actor.get("name")
                             if name and name != "Unknown User":
                                 return name
+                    # Try singular actor
+                    actor = find_key_recursive(s, "actor")
+                    if actor and isinstance(actor, dict):
+                        name = actor.get("name")
+                        if name and name != "Unknown User":
+                            return name
+                    # Try author
+                    author = find_key_recursive(s, "author")
+                    if author and isinstance(author, dict):
+                        name = author.get("name")
+                        if name and name != "Unknown User":
+                            return name
                     return "Unknown User"
 
                 for block in blocks:
@@ -234,13 +302,18 @@ def main():
                         
                         # Extract Message
                         msg = find_actual_message(s)
-                        if not msg: continue
+                        if not msg:
+                            msg = "[Media post - no text]"
                         
                         # Extract User
                         user = find_actual_user(s)
                         
                         # Extract Time (Try multiple naming conventions)
-                        creation_time = find_key_recursive(s, "creation_time") or find_key_recursive(s, "timestamp") or find_key_recursive(s, "publish_time")
+                        creation_time = None
+                        for time_field in TIME_FIELDS:
+                            creation_time = find_key_recursive(s, time_field)
+                            if creation_time:
+                                break
                         
                         if not creation_time:
                             # Log the keys of the story to see what we are missing
@@ -268,10 +341,28 @@ def main():
 
     with sync_playwright() as p:
         is_headless = os.getenv("HEADLESS", "true").lower() == "true"
+
+        # Validate auth file before launching browser
+        auth_path = STORAGE_STATE if os.path.exists(STORAGE_STATE) else None
+        if auth_path:
+            try:
+                with open(auth_path, 'r') as f:
+                    auth_data = json.load(f)
+                if 'cookies' not in auth_data or len(auth_data.get('cookies', [])) == 0:
+                    print("   [WARNING] Auth file has no cookies. Will run unauthenticated.")
+                    auth_path = None
+                else:
+                    print(f"   Auth file loaded: {len(auth_data['cookies'])} cookies found.")
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"   [WARNING] Auth file corrupted: {e}. Will run unauthenticated.")
+                auth_path = None
+        else:
+            print(f"   [WARNING] No auth file found at {STORAGE_STATE}. Will run unauthenticated.")
+
         browser = p.chromium.launch(headless=is_headless, args=["--no-sandbox", "--disable-dev-shm-usage"])
         context = browser.new_context(
-            storage_state=STORAGE_STATE if os.path.exists(STORAGE_STATE) else None,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            storage_state=auth_path,
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             viewport={'width': 1280, 'height': 800}
         )
         page = context.new_page()
@@ -282,6 +373,13 @@ def main():
             # First try with the sorting parameter
             print(f"   ⏳ Navigating to {GROUP_URL}...")
             page.goto(GROUP_URL, wait_until="commit", timeout=120000)
+
+            # Check if we got redirected to login
+            if "login" in page.url.lower():
+                print("   [ERROR] Redirected to Facebook login. Session is expired!")
+                print("   Please run login_helper.py or start_remote_auth.py to refresh your session.")
+                browser.close()
+                return
             
             # --- BYPASS PROFILE MODAL ---
             try:
@@ -290,27 +388,35 @@ def main():
                     page.screenshot(path="vps_pre_bypass.png")
                 except:
                     pass
-                
-                # We use a loop to wait for modal to settle
-                import re
+
+                BYPASS_TEXTS = [
+                    "Continuer en tant que",   # French
+                    "Continue as",             # English
+                    "Continuar como",          # Spanish
+                ]
                 for attempt in range(3):
-                    # Broad text search handles any element (button, div, span)
-                    # We check for both French and English versions
-                    bypass_text = "Continuer en tant que" 
-                    # We look for the profile name too to be very specific
-                    target = page.get_by_text(bypass_text, exact=False).first
-                    
-                    # Check if the element exists at all
-                    if target.count() > 0:
-                        print(f"   👆 Found bypass element. Forcing click...")
-                        # Use force=True to bypass visibility checks that fail in headless
-                        target.click(force=True, timeout=5000)
-                        time.sleep(10)
+                    found_bypass = False
+                    for bypass_text in BYPASS_TEXTS:
+                        target = page.get_by_text(bypass_text, exact=False).first
+                        if target.count() > 0:
+                            print(f"   Found bypass element: '{bypass_text}'. Clicking...")
+                            target.click(force=True, timeout=5000)
+                            time.sleep(10)
+                            found_bypass = True
+                            break
+                    if found_bypass:
                         break
-                    else:
-                        print(f"   ... Bypass button not found yet (attempt {attempt+1}).")
-                        time.sleep(5)
-                
+                    print(f"   ... Bypass button not found yet (attempt {attempt+1}).")
+                    time.sleep(5)
+
+                # Verify we are not stuck on login/checkpoint after bypass
+                try:
+                    current_url = page.url
+                    if "login" in current_url.lower() or "checkpoint" in current_url.lower():
+                        print("   [ERROR] Redirected to login/checkpoint after bypass. Session may be expired.")
+                except:
+                    pass
+
                 try:
                     page.screenshot(path="vps_post_bypass.png")
                 except:
@@ -352,26 +458,40 @@ def main():
 
         # Scroll Loop
         print("3. Scrolling for API Interception...")
-        max_scrolls = 30
-        for s in range(max_scrolls):
+        stall_count = 0
+        for s in range(MAX_SCROLLS):
+            prev_count = len(api_captured_posts)
             page.keyboard.press("End")
             time.sleep(4) # Allow time for API responses to fire
-            
+
+            # Adaptive wait: if no new posts captured, wait extra for slow responses
+            if len(api_captured_posts) == prev_count:
+                stall_count += 1
+                if stall_count >= 5:
+                    print(f"   Stop: No new posts for {stall_count} consecutive scrolls. Feed exhausted.")
+                    break
+                time.sleep(3)
+            else:
+                stall_count = 0
+
             # Check age of latest captured posts to see if we should stop
             older_than_limit = 0
             for p_dict in api_captured_posts.values():
-                p_date, p_time, _ = parse_facebook_date(p_dict['postedAt'], now_run)
-                if p_date:
-                    p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", '%Y-%m-%d %H:%M:%S')
-                    if (now_run - p_dt).total_seconds() / 60 > 59:
-                        older_than_limit += 1
-            
-            if older_than_limit >= 5:
-                print("   🛑 Found 5+ posts older than 59 min via API. Stopping.")
+                try:
+                    p_date, p_time, _ = parse_facebook_date(p_dict['postedAt'], now_run)
+                    if p_date and p_time:
+                        p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", '%Y-%m-%d %H:%M:%S')
+                        if (now_run - p_dt).total_seconds() / 60 > AGE_LIMIT_MINUTES:
+                            older_than_limit += 1
+                except Exception as e:
+                    print(f"   [Warning] Could not parse date in scroll check: {e}")
+
+            if older_than_limit >= 8:
+                print(f"   Stop: Found {older_than_limit} posts older than {AGE_LIMIT_MINUTES} min via API. Stopping.")
                 break
-            
+
             if s % 5 == 0:
-                print(f"   ... Scroll {s+1}, intercepted {len(api_captured_posts)} posts so far.")
+                print(f"   ... Scroll {s+1}/{MAX_SCROLLS}, intercepted {len(api_captured_posts)} posts so far.")
 
         # Refresh session state to keep cookies fresh if we at least reached the stage of scrolling
         try:
@@ -389,16 +509,19 @@ def main():
     # Deduplicate and filter by 59m
     final_posts = []
     for p in all_captured:
-        p_date, p_time, _ = parse_facebook_date(p['postedAt'], now_run)
-        if not p_date: continue
-        
-        p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", '%Y-%m-%d %H:%M:%S')
-        age_min = (now_run - p_dt).total_seconds() / 60
-        if age_min <= 59:
-            final_posts.append(p)
+        try:
+            p_date, p_time, _ = parse_facebook_date(p['postedAt'], now_run)
+            if not p_date or not p_time: continue
+
+            p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", '%Y-%m-%d %H:%M:%S')
+            age_min = (now_run - p_dt).total_seconds() / 60
+            if age_min <= AGE_LIMIT_MINUTES:
+                final_posts.append(p)
+        except Exception as e:
+            print(f"   [Warning] Could not parse date in final filter: {e}")
 
     if not final_posts:
-        print("⚠️ No posts found in the last 59 minutes.")
+        print(f"⚠️ No posts found in the last {AGE_LIMIT_MINUTES} minutes.")
         return
 
     print(f"✅ Success! Found {len(final_posts)} accurate posts via API.")
@@ -423,19 +546,20 @@ def main():
         existing_rows = sheet.get_all_values()
         existing_keys = set()
         for r in existing_rows:
-            if len(r) > 0 and r[0]: existing_keys.add(r[0])
+            if len(r) > 0 and r[0] and r[0] != "post_url": existing_keys.add(r[0])
             if len(r) > 15 and r[15] and len(r) > 5:
-                clean_text = re.sub(r'\s+', '', r[15].lower())[:150]
-                existing_keys.add(f"{r[5]}_{clean_text}")
-        
+                text_hash = hashlib.md5(re.sub(r'\s+', '', r[15].lower()).encode()).hexdigest()
+                existing_keys.add(f"{r[5]}_{text_hash}")
+
         to_upload = []
         for row in formatted_rows:
             url, user, text = row[0], row[5], row[15]
-            clean_text = re.sub(r'\s+', '', text.lower())[:150]
-            text_key = f"{user}_{clean_text}"
+            text_hash = hashlib.md5(re.sub(r'\s+', '', text.lower()).encode()).hexdigest()
+            text_key = f"{user}_{text_hash}"
             if url in existing_keys or text_key in existing_keys: continue
             to_upload.append(row)
-            existing_keys.add(url if url else text_key)
+            existing_keys.add(url)
+            existing_keys.add(text_key)
 
         if to_upload:
             print(f"   [Debug Sheet] Uploading {len(to_upload)} new rows. First time: {to_upload[0][1]}")

@@ -24,7 +24,7 @@ vps_check.png
 vps_error.png
 *.png
 debug_vps.*
-
+CLAUDE.md
 # Data files (Excel/CSV)
 *.xlsx
 *.xls

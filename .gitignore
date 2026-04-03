@@ -36,3 +36,4 @@ CLAUDE.md
 .vscode/
 .vincent/
 .python-version
+api/posts.db

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Carpool Live Board — Sousse</title>
+  <meta name="description" content="Live carpool dashboard for Sousse Facebook group — real-time ride offers and demands." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <!-- Background blobs -->
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div>
+        <h1>🚗 Carpool Live Board</h1>
+        <p class="subtitle">Sousse · Real-time rides from Facebook</p>
+      </div>
+      <div class="header-actions">
+        <button id="sync-btn" class="btn-primary" onclick="triggerScrape()">
+          <span id="sync-icon">⟳</span> Scrape Now
+        </button>
+      </div>
+    </header>
+
+    <!-- Stats bar -->
+    <div class="stats-bar">
+      <div class="stat-card">
+        <span class="stat-value" id="stat-total">—</span>
+        <span class="stat-label">Total Posts</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value offers" id="stat-offers">—</span>
+        <span class="stat-label">Offers</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value demands" id="stat-demands">—</span>
+        <span class="stat-label">Demands</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value sync" id="stat-sync">—</span>
+        <span class="stat-label">Last Scrape</span>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filters glass-panel">
+      <div class="filter-group">
+        <label for="search-input">🔍 Search</label>
+        <input id="search-input" type="text" placeholder="City, name, keywords..." oninput="debounceSearch()" />
+      </div>
+      <div class="filter-group">
+        <label for="type-filter">Filter</label>
+        <select id="type-filter" onchange="loadPosts()">
+          <option value="ALL">All Posts</option>
+          <option value="OFFER">Offers Only</option>
+          <option value="DEMAND">Demands Only</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label for="city-filter">From City</label>
+        <input id="city-filter" type="text" placeholder="e.g. Sousse" oninput="debounceSearch()" />
+      </div>
+      <div class="filter-count">
+        <span id="count-label">Showing — posts</span>
+      </div>
+    </div>
+
+    <!-- Grid -->
+    <div id="posts-grid" class="posts-grid">
+      <div class="loading-state">
+        <div class="spinner"></div>
+        <p>Loading posts...</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sync Toast -->
+  <div id="toast" class="toast"></div>
+
+  <script>
+    let searchTimer;
+
+    function debounceSearch() {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(loadPosts, 300);
+    }
+
+    async function loadPosts() {
+      const search = document.getElementById('search-input').value.trim();
+      const filterType = document.getElementById('type-filter').value;
+      const fromCity = document.getElementById('city-filter').value.trim();
+
+      const params = new URLSearchParams({ filter_type: filterType });
+      if (search) params.append('search', search);
+      if (fromCity) params.append('from_city', fromCity);
+
+      const grid = document.getElementById('posts-grid');
+      grid.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Loading...</p></div>`;
+
+      try {
+        const res = await fetch(`/api/posts?${params}`);
+        const posts = await res.json();
+        renderPosts(posts);
+      } catch (e) {
+        grid.innerHTML = `<div class="error-state">❌ Failed to load posts.</div>`;
+      }
+    }
+
+    function renderPosts(posts) {
+      const grid = document.getElementById('posts-grid');
+      document.getElementById('count-label').textContent = `Showing ${posts.length} post${posts.length !== 1 ? 's' : ''}`;
+
+      if (!posts.length) {
+        grid.innerHTML = `
+          <div class="empty-state glass-panel">
+            <div class="empty-icon">🔍</div>
+            <h3>No rides found</h3>
+            <p>Try different search terms or sync the latest data.</p>
+          </div>`;
+        return;
+      }
+
+      grid.innerHTML = posts.map(post => {
+        const isOffer = (post.offer_or_demand || '').toLowerCase().includes('offer');
+        const isDemand = (post.offer_or_demand || '').toLowerCase().includes('demand');
+        const initials = (post.profile_name || '?').substring(0, 2).toUpperCase();
+        const route = (post.from_city && post.to_city) 
+          ? `${post.from_city} → ${post.to_city}` 
+          : (post.from_city || post.to_city || '');
+        const price = post.price ? `💰 ${post.price}` : '';
+        const passengers = post.nr_passengers ? `👥 ${post.nr_passengers}` : '';
+        const depTime = post.preferred_departure_time ? `🕐 ${post.preferred_departure_time}` : '';
+
+        return `
+          <div class="post-card glass-panel">
+            <div class="post-header">
+              <div class="post-user">
+                <div class="avatar" style="background: ${avatarColor(post.profile_name)}">${initials}</div>
+                <div>
+                  <div class="user-name">${post.profile_name || 'Unknown'}</div>
+                  <div class="post-meta">${post.post_date || ''} ${post.post_time || ''}</div>
+                </div>
+              </div>
+              <div class="tags">
+                ${isOffer ? '<span class="tag tag-offer">Offer</span>' : ''}
+                ${isDemand ? '<span class="tag tag-demand">Demand</span>' : ''}
+                ${post.gender ? `<span class="tag tag-gender">${post.gender}</span>` : ''}
+              </div>
+            </div>
+
+            ${route ? `<div class="route-bar">📍 ${route}</div>` : ''}
+
+            <div class="post-body">${escapeHtml(post.post_text || '[No text]')}</div>
+
+            ${post.post_text_english ? `
+              <details class="translation">
+                <summary>🌍 English translation</summary>
+                <p>${escapeHtml(post.post_text_english)}</p>
+              </details>
+            ` : ''}
+
+            <div class="post-footer">
+              <div class="meta-chips">
+                ${price ? `<span class="chip">${price}</span>` : ''}
+                ${passengers ? `<span class="chip">${passengers}</span>` : ''}
+                ${depTime ? `<span class="chip">${depTime}</span>` : ''}
+              </div>
+              <a href="${post.post_url}" target="_blank" rel="noopener" class="btn-ghost">View ↗</a>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function avatarColor(name) {
+      const colors = [
+        'linear-gradient(135deg,#3b82f6,#8b5cf6)',
+        'linear-gradient(135deg,#ec4899,#f59e0b)',
+        'linear-gradient(135deg,#10b981,#3b82f6)',
+        'linear-gradient(135deg,#f59e0b,#ef4444)',
+        'linear-gradient(135deg,#8b5cf6,#ec4899)',
+        'linear-gradient(135deg,#06b6d4,#10b981)',
+      ];
+      if (!name) return colors[0];
+      return colors[name.charCodeAt(0) % colors.length];
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    async function triggerScrape() {
+      const btn = document.getElementById('sync-btn');
+      const icon = document.getElementById('sync-icon');
+      btn.disabled = true;
+      icon.classList.add('spinning');
+
+      showToast('⏳ Scraper started in background...');
+      try {
+        const res = await fetch('/api/scrape', { method: 'POST' });
+        const data = await res.json();
+        showToast(`✅ ${data.message} Refresh in a minute.`);
+      } catch (e) {
+        showToast('❌ Failed to start scraper. Check server logs.');
+      } finally {
+        setTimeout(() => {
+          btn.disabled = false;
+          icon.classList.remove('spinning');
+        }, 5000);
+      }
+    }
+
+    async function refreshStats() {
+      try {
+        const res = await fetch('/api/stats');
+        const s = await res.json();
+        document.getElementById('stat-total').textContent = s.total;
+        document.getElementById('stat-offers').textContent = s.offers;
+        document.getElementById('stat-demands').textContent = s.demands;
+        document.getElementById('stat-sync').textContent = s.latest_sync || 'Never';
+      } catch (e) {}
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 4000);
+    }
+
+    // Initial load
+    refreshStats();
+    loadPosts();
+  </script>
+</body>
+</html>

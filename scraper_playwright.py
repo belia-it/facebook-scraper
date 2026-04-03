@@ -308,11 +308,32 @@ def main():
                         # Extract User
                         user = find_actual_user(s)
                         
-                        # Extract Time (Try multiple naming conventions)
+                        # Extract Time — prefer numeric timestamps, skip dict strategy objects
                         creation_time = None
+                        def find_numeric_time(obj, key):
+                            """Find first numeric (int/float) value for a key, recursively."""
+                            if isinstance(obj, dict):
+                                if key in obj:
+                                    v = obj[key]
+                                    if isinstance(v, (int, float)):
+                                        return v
+                                    if isinstance(v, str) and v.isdigit():
+                                        return int(v)
+                                for child in obj.values():
+                                    res = find_numeric_time(child, key)
+                                    if res is not None:
+                                        return res
+                            elif isinstance(obj, list):
+                                for child in obj:
+                                    res = find_numeric_time(child, key)
+                                    if res is not None:
+                                        return res
+                            return None
+
                         for time_field in TIME_FIELDS:
-                            creation_time = find_key_recursive(s, time_field)
-                            if creation_time:
+                            val = find_numeric_time(s, time_field)
+                            if val is not None:
+                                creation_time = val
                                 break
                         
                         if not creation_time:
@@ -456,21 +477,126 @@ def main():
             browser.close()
             return
 
+        # Define DOM scraping function so we can call it progressively
+        def scrape_dom_posts():
+            try:
+                dom_posts = page.evaluate("""() => {
+                    const posts = [];
+                    // Facebook renders posts inside [role="article"] elements
+                    const articles = document.querySelectorAll('[role="article"]');
+                    articles.forEach(article => {
+                        try {
+                            // Extract post URL from timestamp links
+                            const links = article.querySelectorAll('a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"]');
+                            let url = '';
+                            let timeText = '';
+                            for (const link of links) {
+                                const href = link.getAttribute('href');
+                                if (href && (href.includes('/posts/') || href.includes('/permalink/'))) {
+                                    url = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
+                                    // The timestamp is often in a sibling or child of the link
+                                    const ariaLabel = link.getAttribute('aria-label');
+                                    if (ariaLabel) timeText = ariaLabel;
+                                    break;
+                                }
+                            }
+                            if (!url) return;
+
+                            // Extract user name from the first strong/heading link
+                            let user = '';
+                            const userLink = article.querySelector('strong a, h3 a, h4 a, [data-ad-rendering-role="profile_name"] a');
+                            if (userLink) user = userLink.textContent.trim();
+
+                            // Extract post text from the main content area
+                            let text = '';
+                            const textEl = article.querySelector('[data-ad-comet-preview="message"], [data-ad-preview="message"]');
+                            if (textEl) {
+                                text = textEl.textContent.trim();
+                            } else {
+                                // Fallback: look for the largest text block
+                                const divs = article.querySelectorAll('div[dir="auto"]');
+                                let maxLen = 0;
+                                divs.forEach(d => {
+                                    const t = d.textContent.trim();
+                                    if (t.length > maxLen && t.length > 5) {
+                                        maxLen = t.length;
+                                        text = t;
+                                    }
+                                });
+                            }
+
+                            if (user || text) {
+                                posts.push({ url, user: user || 'Unknown User', text: text || '[Media post - no text]', timeText });
+                            }
+                        } catch(e) {}
+                    });
+                    return posts;
+                }""")
+
+                dom_added = 0
+                for dp in dom_posts:
+                    # Generate a post_id from URL
+                    post_id_match = re.search(r'/posts/(\d+)', dp['url']) or re.search(r'/permalink/(\d+)', dp['url'])
+                    if not post_id_match:
+                        continue
+                    post_id = post_id_match.group(1)
+
+                    if post_id not in api_captured_posts:
+                        # Parse time from aria-label if available
+                        posted_at = None
+                        if dp.get('timeText'):
+                            p_date, p_time, _ = parse_facebook_date(dp['timeText'], now_run)
+                            if p_date and p_time:
+                                posted_at = dp['timeText']
+
+                        api_captured_posts[post_id] = {
+                            'user': dp['user'],
+                            'text': dp['text'],
+                            'url': dp['url'],
+                            'postedAt': posted_at,
+                            'isFromApi': False
+                        }
+                        dom_added += 1
+                return dom_added
+            except Exception as dom_e:
+                print(f"   [Warning] Continuous DOM scan failed: {dom_e}")
+                return 0
+
         # Scroll Loop
-        print("3. Scrolling for API Interception...")
+        print("3. Scrolling for API Interception and extracting DOM elements...")
+        initial_dom = scrape_dom_posts()
+        if initial_dom > 0:
+            print(f"   Initial DOM scan captured {initial_dom} posts.")
+
         stall_count = 0
         for s in range(MAX_SCROLLS):
             prev_count = len(api_captured_posts)
-            page.keyboard.press("End")
-            time.sleep(4) # Allow time for API responses to fire
+            
+            # Progressive smooth scroll instead of jumping to end
+            # Send 'PageDown' multiple times to slowly trigger lazy loading
+            for _ in range(3):
+                page.keyboard.press("PageDown")
+                time.sleep(1.5)
+            
+            # Allow time for API responses to fire
+            time.sleep(2) 
 
-            # Adaptive wait: if no new posts captured, wait extra for slow responses
+            # Continuously scrape the DOM during scrolling to catch posts before they unmount
+            scrape_dom_posts()
+
+            # Adaptive wait: if no new posts captured, wait extra for slow responses or DOM mounting
             if len(api_captured_posts) == prev_count:
                 stall_count += 1
-                if stall_count >= 5:
-                    print(f"   Stop: No new posts for {stall_count} consecutive scrolls. Feed exhausted.")
-                    break
+                # Try a gentle scroll up and down to trigger intersection observers just in case
                 time.sleep(3)
+                page.keyboard.press("PageUp")
+                time.sleep(1.5)
+                page.keyboard.press("PageDown")
+                time.sleep(1.5)
+
+                if stall_count >= 5:
+                    print(f"   Stop: No new posts for {stall_count} consecutive scroll batches. Feed exhausted.")
+                    break
             else:
                 stall_count = 0
 
@@ -484,14 +610,16 @@ def main():
                         if (now_run - p_dt).total_seconds() / 60 > AGE_LIMIT_MINUTES:
                             older_than_limit += 1
                 except Exception as e:
-                    print(f"   [Warning] Could not parse date in scroll check: {e}")
+                    pass
 
             if older_than_limit >= 8:
-                print(f"   Stop: Found {older_than_limit} posts older than {AGE_LIMIT_MINUTES} min via API. Stopping.")
+                print(f"   Stop: Found {older_than_limit} posts older than {AGE_LIMIT_MINUTES} min. Stopping.")
                 break
 
-            if s % 5 == 0:
-                print(f"   ... Scroll {s+1}/{MAX_SCROLLS}, intercepted {len(api_captured_posts)} posts so far.")
+            if s % 2 == 0:
+                print(f"   ... Scroll batch {s+1}/{MAX_SCROLLS}, total captured: {len(api_captured_posts)} posts.")
+
+        print(f"3b. Navigation complete. Captured {len(api_captured_posts)} total posts (API + DOM).")
 
         # Refresh session state to keep cookies fresh if we at least reached the stage of scrolling
         try:
@@ -506,10 +634,15 @@ def main():
     print("4. Processing intercepted data...")
     all_captured = list(api_captured_posts.values())
     
-    # Deduplicate and filter by 59m
+    # Deduplicate and filter by age limit
     final_posts = []
     for p in all_captured:
         try:
+            if p['postedAt'] is None:
+                # DOM-scraped posts with no timestamp — include them since they were visible on the page
+                final_posts.append(p)
+                continue
+
             p_date, p_time, _ = parse_facebook_date(p['postedAt'], now_run)
             if not p_date or not p_time: continue
 
@@ -528,12 +661,15 @@ def main():
     
     # Formating for Sheets
     formatted_rows = []
-    calendar_wk = now_run.isocalendar()[1]
     for p in final_posts:
         p_date, p_time, _ = parse_facebook_date(p['postedAt'], now_run)
-        wd = datetime.datetime.strptime(p_date, '%Y-%m-%d').strftime('%A')
+        if not p_date or not p_time:
+            continue
+        post_dt = datetime.datetime.strptime(p_date, '%Y-%m-%d')
+        calendar_wk = post_dt.isocalendar()[1]
+        wd = post_dt.strftime('%A')
         formatted_rows.append([
-            p['url'], p_time, p_date, calendar_wk, wd, p['user'], 
+            p['url'], p_time, p_date, calendar_wk, wd, p['user'],
             "", "", "", "", "", "", "", "", "", p['text'],
             "", "", now_run.strftime('%Y-%m-%d %H:%M:%S')
         ])
@@ -545,21 +681,43 @@ def main():
     try:
         existing_rows = sheet.get_all_values()
         existing_keys = set()
+        
+        def extract_post_id(url_str):
+            match = re.search(r'/(?:posts|permalink|p)/(\d+)', url_str)
+            if match:
+                return match.group(1)
+            # Fallback to any sequence of numbers at the end
+            fallback = re.search(r'(\d+)/?$', url_str)
+            return fallback.group(1) if fallback else url_str
+
         for r in existing_rows:
-            if len(r) > 0 and r[0] and r[0] != "post_url": existing_keys.add(r[0])
-            if len(r) > 15 and r[15] and len(r) > 5:
+            if len(r) > 0 and r[0] and r[0] != "post_url":
+                existing_keys.add(r[0])
+                existing_keys.add(extract_post_id(r[0]))
+                
+            if len(r) > 15 and r[15] and len(r) > 5 and r[15] != "[Media post - no text]":
                 text_hash = hashlib.md5(re.sub(r'\s+', '', r[15].lower()).encode()).hexdigest()
-                existing_keys.add(f"{r[5]}_{text_hash}")
+                date_val = r[2] if len(r) > 2 else ""
+                existing_keys.add(f"{r[5]}_{text_hash}_{date_val}")
 
         to_upload = []
         for row in formatted_rows:
-            url, user, text = row[0], row[5], row[15]
-            text_hash = hashlib.md5(re.sub(r'\s+', '', text.lower()).encode()).hexdigest()
-            text_key = f"{user}_{text_hash}"
-            if url in existing_keys or text_key in existing_keys: continue
+            url, date_val, user, text = row[0], row[2], row[5], row[15]
+            post_id = extract_post_id(url)
+            
+            if url in existing_keys or post_id in existing_keys: 
+                continue
+                
+            if text != "[Media post - no text]":
+                text_hash = hashlib.md5(re.sub(r'\s+', '', text.lower()).encode()).hexdigest()
+                text_key = f"{user}_{text_hash}_{date_val}"
+                if text_key in existing_keys: 
+                    continue
+                existing_keys.add(text_key)
+
             to_upload.append(row)
             existing_keys.add(url)
-            existing_keys.add(text_key)
+            existing_keys.add(post_id)
 
         if to_upload:
             print(f"   [Debug Sheet] Uploading {len(to_upload)} new rows. First time: {to_upload[0][1]}")

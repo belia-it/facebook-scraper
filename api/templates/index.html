@@ -9,6 +9,108 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+    /* ── View toggle ─────────────────────────────────────────────────────── */
+    .view-toggle {
+      display: flex;
+      gap: 4px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 10px;
+      padding: 4px;
+    }
+    .view-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      color: rgba(255,255,255,0.5);
+      font-family: inherit;
+      font-size: 0.82rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      white-space: nowrap;
+    }
+    .view-btn:hover { color: rgba(255,255,255,0.85); background: rgba(255,255,255,0.08); }
+    .view-btn.active {
+      background: rgba(255,255,255,0.14);
+      color: #fff;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.25);
+    }
+    .view-btn svg { width: 16px; height: 16px; }
+
+    /* ── Table view ──────────────────────────────────────────────────────── */
+    .posts-table-wrapper {
+      width: 100%;
+      overflow-x: auto;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      backdrop-filter: blur(12px);
+    }
+    .posts-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.84rem;
+    }
+    .posts-table thead {
+      background: rgba(255,255,255,0.06);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .posts-table th {
+      padding: 13px 16px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: rgba(255,255,255,0.5);
+      white-space: nowrap;
+    }
+    .posts-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      vertical-align: middle;
+      color: rgba(255,255,255,0.85);
+    }
+    .posts-table tbody tr {
+      transition: background 0.15s;
+    }
+    .posts-table tbody tr:hover { background: rgba(255,255,255,0.04); }
+    .posts-table tbody tr:last-child td { border-bottom: none; }
+    .tbl-user {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      white-space: nowrap;
+    }
+    .tbl-avatar {
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.7rem; font-weight: 700; color: #fff;
+      flex-shrink: 0;
+    }
+    .tbl-text {
+      max-width: 320px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: rgba(255,255,255,0.7);
+    }
+    .tbl-link {
+      color: rgba(139,92,246,0.9);
+      text-decoration: none;
+      font-size: 0.78rem;
+      white-space: nowrap;
+    }
+    .tbl-link:hover { color: #a78bfa; text-decoration: underline; }
+    .tbl-date { white-space: nowrap; color: rgba(255,255,255,0.5); font-size: 0.8rem; }
+  </style>
 </head>
 <body>
 
@@ -21,11 +123,30 @@
     <header>
       <div>
         <h1>🚗 Carpool Live Board</h1>
-        <p class="subtitle">Sousse · Real-time rides from Facebook</p>
+        <p class="subtitle">Sousse · Real-time rides from Facebook <span id="live-indicator" class="live-badge">Connecting...</span></p>
       </div>
       <div class="header-actions">
+        <!-- View toggle -->
+        <div class="view-toggle" role="group" aria-label="View mode">
+          <button id="btn-cards" class="view-btn active" onclick="setView('cards')" title="Card view">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+              <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+            </svg>
+            Cards
+          </button>
+          <button id="btn-table" class="view-btn" onclick="setView('table')" title="Table view">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 6h18M3 12h18M3 18h18"/><path d="M8 3v18M16 3v18"/>
+            </svg>
+            Table
+          </button>
+        </div>
         <button id="sync-btn" class="btn-primary" onclick="triggerScrape()">
           <span id="sync-icon">⟳</span> Scrape Now
+        </button>
+        <button id="clear-btn" class="btn-ghost" onclick="clearPosts()" style="color:#f87171;border-color:rgba(248,113,113,0.3)">
+          🗑 Clear Posts
         </button>
       </div>
     </header>
@@ -73,7 +194,7 @@
       </div>
     </div>
 
-    <!-- Grid -->
+    <!-- Content area (cards or table) -->
     <div id="posts-grid" class="posts-grid">
       <div class="loading-state">
         <div class="spinner"></div>
@@ -86,13 +207,31 @@
   <div id="toast" class="toast"></div>
 
   <script>
+    // ─── State ────────────────────────────────────────────────────────────
+    let currentView = localStorage.getItem('viewMode') || 'cards';
+    let currentPosts = [];
     let searchTimer;
 
+    // ─── View mode ────────────────────────────────────────────────────────
+    function setView(mode) {
+      currentView = mode;
+      localStorage.setItem('viewMode', mode);
+      document.getElementById('btn-cards').classList.toggle('active', mode === 'cards');
+      document.getElementById('btn-table').classList.toggle('active', mode === 'table');
+      renderPosts(currentPosts);
+    }
+
+    // Apply saved view on load
+    document.getElementById('btn-cards').classList.toggle('active', currentView === 'cards');
+    document.getElementById('btn-table').classList.toggle('active', currentView === 'table');
+
+    // ─── Search / filter ──────────────────────────────────────────────────
     function debounceSearch() {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(loadPosts, 300);
     }
 
+    // ─── Load posts ───────────────────────────────────────────────────────
     async function loadPosts() {
       const search = document.getElementById('search-input').value.trim();
       const filterType = document.getElementById('type-filter').value;
@@ -107,19 +246,55 @@
 
       try {
         const res = await fetch(`/api/posts?${params}`);
-        const posts = await res.json();
-        renderPosts(posts);
+        currentPosts = await res.json();
+        renderPosts(currentPosts);
       } catch (e) {
         grid.innerHTML = `<div class="error-state">❌ Failed to load posts.</div>`;
       }
     }
 
-    function renderPosts(posts) {
-      const grid = document.getElementById('posts-grid');
-      document.getElementById('count-label').textContent = `Showing ${posts.length} post${posts.length !== 1 ? 's' : ''}`;
+    // ─── Render dispatcher ────────────────────────────────────────────────
+    function applyClientFilters() {
+   const toCity = (document.getElementById('to-city-filter').value || '').trim().toLowerCase();
+   const sort = document.getElementById('sort-select').value;
+
+   let posts = [...currentPosts];
+
+   // Client-side To City filter
+   if (toCity) {
+    posts = posts.filter(p =>
+     (p.to_city || '').toLowerCase().includes(toCity) ||
+     (p.post_text || '').toLowerCase().includes(toCity)
+    );
+   }
+
+   // Sort
+   posts.sort((a, b) => {
+    if (sort === 'oldest') {
+     return (a.post_date || '') > (b.post_date || '') ? 1 : -1;
+    }
+    if (sort === 'price_asc') {
+     return (parseFloat(a.price) || 0) - (parseFloat(b.price) || 0);
+    }
+    if (sort === 'price_desc') {
+     return (parseFloat(b.price) || 0) - (parseFloat(a.price) || 0);
+    }
+    if (sort === 'name_az') {
+     return (a.profile_name || '').localeCompare(b.profile_name || '');
+    }
+    // newest (default): already sorted by API, keep order
+    return 0;
+   });
+
+   renderPosts(posts);
+  }
+
+  function renderPosts(posts) {
+      document.getElementById('count-label').textContent =
+        `Showing ${posts.length} post${posts.length !== 1 ? 's' : ''}`;
 
       if (!posts.length) {
-        grid.innerHTML = `
+        document.getElementById('posts-grid').innerHTML = `
           <div class="empty-state glass-panel">
             <div class="empty-icon">🔍</div>
             <h3>No rides found</h3>
@@ -128,58 +303,128 @@
         return;
       }
 
-      grid.innerHTML = posts.map(post => {
-        const isOffer = (post.offer_or_demand || '').toLowerCase().includes('offer');
-        const isDemand = (post.offer_or_demand || '').toLowerCase().includes('demand');
-        const initials = (post.profile_name || '?').substring(0, 2).toUpperCase();
-        const route = (post.from_city && post.to_city) 
-          ? `${post.from_city} → ${post.to_city}` 
-          : (post.from_city || post.to_city || '');
-        const price = post.price ? `💰 ${post.price}` : '';
-        const passengers = post.nr_passengers ? `👥 ${post.nr_passengers}` : '';
-        const depTime = post.preferred_departure_time ? `🕐 ${post.preferred_departure_time}` : '';
-
-        return `
-          <div class="post-card glass-panel">
-            <div class="post-header">
-              <div class="post-user">
-                <div class="avatar" style="background: ${avatarColor(post.profile_name)}">${initials}</div>
-                <div>
-                  <div class="user-name">${post.profile_name || 'Unknown'}</div>
-                  <div class="post-meta">${post.post_date || ''} ${post.post_time || ''}</div>
-                </div>
-              </div>
-              <div class="tags">
-                ${isOffer ? '<span class="tag tag-offer">Offer</span>' : ''}
-                ${isDemand ? '<span class="tag tag-demand">Demand</span>' : ''}
-                ${post.gender ? `<span class="tag tag-gender">${post.gender}</span>` : ''}
-              </div>
-            </div>
-
-            ${route ? `<div class="route-bar">📍 ${route}</div>` : ''}
-
-            <div class="post-body">${escapeHtml(post.post_text || '[No text]')}</div>
-
-            ${post.post_text_english ? `
-              <details class="translation">
-                <summary>🌍 English translation</summary>
-                <p>${escapeHtml(post.post_text_english)}</p>
-              </details>
-            ` : ''}
-
-            <div class="post-footer">
-              <div class="meta-chips">
-                ${price ? `<span class="chip">${price}</span>` : ''}
-                ${passengers ? `<span class="chip">${passengers}</span>` : ''}
-                ${depTime ? `<span class="chip">${depTime}</span>` : ''}
-              </div>
-              <a href="${post.post_url}" target="_blank" rel="noopener" class="btn-ghost">View ↗</a>
-            </div>
-          </div>
-        `;
-      }).join('');
+      if (currentView === 'table') {
+        renderTable(posts);
+      } else {
+        renderCards(posts);
+      }
     }
 
+    // ─── Cards view ───────────────────────────────────────────────────────
+    function renderCards(posts) {
+      const grid = document.getElementById('posts-grid');
+      grid.className = 'posts-grid';
+      grid.innerHTML = posts.map(post => createPostHTML(post)).join('');
+    }
+
+    function createPostHTML(post) {
+      const isOffer = (post.offer_or_demand || '').toLowerCase().includes('offer');
+      const isDemand = (post.offer_or_demand || '').toLowerCase().includes('demand');
+      const initials = (post.profile_name || '?').substring(0, 2).toUpperCase();
+      const route = (post.from_city && post.to_city)
+        ? `${post.from_city} → ${post.to_city}`
+        : (post.from_city || post.to_city || '');
+      const price = post.price ? `💰 ${post.price}` : '';
+      const passengers = post.nr_passengers ? `👥 ${post.nr_passengers}` : '';
+      const depTime = post.preferred_departure_time ? `🕐 ${post.preferred_departure_time}` : '';
+
+      return `
+        <div class="post-card glass-panel new-post-animate">
+          <div class="post-header">
+            <div class="post-user">
+              <div class="avatar" style="background: ${avatarColor(post.profile_name)}">${initials}</div>
+              <div>
+                <div class="user-name">${escapeHtml(post.profile_name || 'Unknown')}</div>
+                <div class="post-meta">${post.post_date || ''} ${post.post_time || ''}</div>
+              </div>
+            </div>
+            <div class="tags">
+              ${isOffer ? '<span class="tag tag-offer">Offer</span>' : ''}
+              ${isDemand ? '<span class="tag tag-demand">Demand</span>' : ''}
+              ${post.gender ? `<span class="tag tag-gender">${escapeHtml(post.gender)}</span>` : ''}
+            </div>
+          </div>
+
+          ${route ? `<div class="route-bar">📍 ${escapeHtml(route)}</div>` : ''}
+
+          <div class="post-body">${escapeHtml(post.post_text || '[No text]')}</div>
+
+          ${post.post_text_english ? `
+            <details class="translation">
+              <summary>🌍 English translation</summary>
+              <p>${escapeHtml(post.post_text_english)}</p>
+            </details>
+          ` : ''}
+
+          <div class="post-footer">
+            <div class="meta-chips">
+              ${price ? `<span class="chip">${price}</span>` : ''}
+              ${passengers ? `<span class="chip">${passengers}</span>` : ''}
+              ${depTime ? `<span class="chip">${depTime}</span>` : ''}
+            </div>
+            <a href="${post.post_url}" target="_blank" rel="noopener" class="btn-ghost">View ↗</a>
+          </div>
+        </div>
+      `;
+    }
+
+    // ─── Table view ───────────────────────────────────────────────────────
+    function renderTable(posts) {
+      const grid = document.getElementById('posts-grid');
+      grid.className = '';   // remove posts-grid class to avoid grid CSS
+      grid.innerHTML = `
+        <div class="posts-table-wrapper">
+          <table class="posts-table" id="data-table">
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Date & Time</th>
+                <th>Type</th>
+                <th>Route</th>
+                <th>Post Text</th>
+                <th>Price</th>
+                <th>Link</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${posts.map(post => createTableRow(post)).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function createTableRow(post) {
+      const isOffer = (post.offer_or_demand || '').toLowerCase().includes('offer');
+      const isDemand = (post.offer_or_demand || '').toLowerCase().includes('demand');
+      const initials = (post.profile_name || '?').substring(0, 2).toUpperCase();
+      const route = (post.from_city && post.to_city)
+        ? `${post.from_city} → ${post.to_city}`
+        : (post.from_city || post.to_city || '—');
+
+      return `
+        <tr>
+          <td>
+            <div class="tbl-user">
+              <div class="tbl-avatar" style="background: ${avatarColor(post.profile_name)}">${initials}</div>
+              ${escapeHtml(post.profile_name || 'Unknown')}
+            </div>
+          </td>
+          <td class="tbl-date">${post.post_date || '—'}<br><span style="color:rgba(255,255,255,0.35)">${post.post_time || ''}</span></td>
+          <td>
+            ${isOffer ? '<span class="tag tag-offer">Offer</span>' : ''}
+            ${isDemand ? '<span class="tag tag-demand">Demand</span>' : ''}
+            ${!isOffer && !isDemand ? '<span style="color:rgba(255,255,255,0.3)">—</span>' : ''}
+          </td>
+          <td style="white-space:nowrap">${escapeHtml(route)}</td>
+          <td><div class="tbl-text" title="${escapeHtml(post.post_text || '')}">${escapeHtml(post.post_text || '[No text]')}</div></td>
+          <td style="white-space:nowrap">${post.price ? `💰 ${escapeHtml(post.price)}` : '—'}</td>
+          <td><a href="${post.post_url}" target="_blank" rel="noopener" class="tbl-link">View ↗</a></td>
+        </tr>
+      `;
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────────────
     function avatarColor(name) {
       const colors = [
         'linear-gradient(135deg,#3b82f6,#8b5cf6)',
@@ -201,6 +446,7 @@
         .replace(/"/g, '&quot;');
     }
 
+    // ─── Scrape trigger ───────────────────────────────────────────────────
     async function triggerScrape() {
       const btn = document.getElementById('sync-btn');
       const icon = document.getElementById('sync-icon');
@@ -222,6 +468,26 @@
       }
     }
 
+    // ─── Clear posts ──────────────────────────────────────────────────────
+    async function clearPosts() {
+      if (!confirm('Delete all posts from the database? This cannot be undone.')) return;
+      const btn = document.getElementById('clear-btn');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/posts', { method: 'DELETE' });
+        const data = await res.json();
+        showToast('🗑 ' + data.message);
+        currentPosts = [];
+        loadPosts();
+        refreshStats();
+      } catch (e) {
+        showToast('❌ Failed to clear posts.');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // ─── Stats ─────────────────────────────────────────────────────────── 
     async function refreshStats() {
       try {
         const res = await fetch('/api/stats');
@@ -233,6 +499,7 @@
       } catch (e) {}
     }
 
+    // ─── Toast ────────────────────────────────────────────────────────────
     function showToast(msg) {
       const toast = document.getElementById('toast');
       toast.textContent = msg;
@@ -240,9 +507,82 @@
       setTimeout(() => toast.classList.remove('show'), 4000);
     }
 
-    // Initial load
+    // ─── WebSocket ────────────────────────────────────────────────────────
+    function initWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      const socket = new WebSocket(wsUrl);
+      const indicator = document.getElementById('live-indicator');
+
+      socket.onopen = () => {
+        indicator.textContent = '● Live';
+        indicator.classList.add('connected');
+      };
+
+      socket.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'new_post') {
+          handleIncomingPost(msg.data);
+        }
+      };
+
+      socket.onclose = () => {
+        indicator.textContent = 'Disconnected (Retrying...)';
+        indicator.classList.remove('connected');
+        setTimeout(initWebSocket, 5000);
+      };
+
+      socket.onerror = () => { socket.close(); };
+    }
+
+    function handleIncomingPost(post) {
+      const search = document.getElementById('search-input').value.toLowerCase();
+      const filterType = document.getElementById('type-filter').value;
+      const fromCity = document.getElementById('city-filter').value.toLowerCase();
+
+      if (filterType !== 'ALL' && !post.offer_or_demand?.includes(filterType)) return;
+      if (search && !post.post_text?.toLowerCase().includes(search) &&
+          !post.profile_name?.toLowerCase().includes(search)) return;
+      if (fromCity && !post.post_text?.toLowerCase().includes(fromCity)) return;
+
+      // Prepend to current posts list and re-render
+      currentPosts = [post, ...currentPosts];
+
+      const grid = document.getElementById('posts-grid');
+      if (currentView === 'table') {
+        // In table mode — prepend a row to the tbody
+        const tbody = grid.querySelector('tbody');
+        if (tbody) {
+          const temp = document.createElement('tbody');
+          temp.innerHTML = createTableRow(post);
+          const newRow = temp.firstElementChild;
+          newRow.style.animation = 'fadeSlideIn 0.4s ease';
+          tbody.insertBefore(newRow, tbody.firstChild);
+        } else {
+          renderTable(currentPosts);
+        }
+      } else {
+        // Cards mode — prepend card
+        const emptyState = grid.querySelector('.empty-state');
+        if (emptyState) grid.innerHTML = '';
+        const temp = document.createElement('div');
+        temp.innerHTML = createPostHTML(post);
+        const postEl = temp.firstElementChild;
+        grid.insertBefore(postEl, grid.firstChild);
+      }
+
+      // Update count
+      const countLabel = document.getElementById('count-label');
+      const currentCount = parseInt(countLabel.textContent.match(/\d+/)) || 0;
+      countLabel.textContent = `Showing ${currentCount + 1} posts`;
+
+      refreshStats();
+    }
+
+    // ─── Init ─────────────────────────────────────────────────────────────
     refreshStats();
     loadPosts();
+    initWebSocket();
   </script>
 </body>
 </html>

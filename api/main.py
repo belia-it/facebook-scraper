@@ -1,19 +1,54 @@
 import os
-import subprocess
 import sys
+import subprocess
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Query, BackgroundTasks, HTTPException
+from typing import List
+from fastapi import FastAPI, Query, BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-
-from database import init_db, query_posts, get_stats
+from pydantic import BaseModel
 
 # ── Paths ─────────────────────────────────────────────────────────────────
 API_DIR  = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(API_DIR)
+sys.path.append(API_DIR)
+
+from database import init_db, query_posts, get_stats, clear_posts
+
 SCRAPER_DB    = os.path.join(ROOT_DIR, "scraper_db.py")
 DASHBOARD_HTML = os.path.join(API_DIR, "templates", "index.html")
+
+class Post(BaseModel):
+    id: int = None
+    profile_name: str = None
+    post_date: str = None
+    post_time: str = None
+    from_city: str = None
+    to_city: str = None
+    post_text: str = None
+    post_text_english: str = None
+    offer_or_demand: str = None
+    price: str = None
+    nr_passengers: str = None
+    gender: str = None
+    post_url: str = None
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            await connection.send_json(message)
+
+manager = ConnectionManager()
 
 
 # ── App lifecycle ──────────────────────────────────────────────────────────
@@ -84,7 +119,32 @@ async def api_scrape(background_tasks: BackgroundTasks):
     return {"status": "started", "message": "Scraper is running in the background."}
 
 
+@app.delete("/api/posts")
+async def api_clear_posts():
+    """Delete all posts from the database."""
+    clear_posts()
+    return {"status": "ok", "message": "All posts cleared."}
+
+
 @app.get("/api/health")
 async def health():
     stats = get_stats()
     return {"status": "ok", **stats}
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+@app.post("/api/internal/post-update")
+async def post_update(post: Post):
+    """
+    Called by the scraper when a new post is saved.
+    Broadcasts it to all connected WebSocket clients.
+    """
+    await manager.broadcast({"type": "new_post", "data": post.dict()})
+    return {"status": "ok"}

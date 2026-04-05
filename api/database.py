@@ -119,6 +119,13 @@ def query_posts(search: str = "", filter_type: str = "ALL", limit: int = 200):
     conn.close()
     return [dict(r) for r in rows]
 
+def clear_posts():
+    conn = get_connection()
+    conn.execute("DELETE FROM posts")
+    conn.execute("VACUUM")
+    conn.commit()
+    conn.close()
+
 def get_stats():
     conn = get_connection()
     total = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]

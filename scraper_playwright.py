@@ -332,6 +332,17 @@ def main():
                         post_id = s.get("post_id") or s.get("id")
                         if not post_id: continue
                         
+                        # Filter out comments: base64 IDs decode to "comment:..."
+                        pid_str = str(post_id)
+                        if not pid_str.isdigit():
+                            try:
+                                import base64
+                                decoded = base64.b64decode(pid_str + "==").decode("utf-8", errors="ignore")
+                                if decoded.startswith("comment"):
+                                    continue
+                            except Exception:
+                                pass
+                        
                         # Extract Message
                         msg = find_actual_message(s)
                         if not msg:
@@ -525,9 +536,20 @@ def main():
                     const feed = document.querySelector('[role="feed"]');
                     const containers = feed ? Array.from(feed.children) : [];
 
-                    // Strategy 2: [role="article"] (works in headless/degraded pages)
+                    // Strategy 2: [role="article"] — only top-level (not comment articles nested inside posts)
                     const articles = document.querySelectorAll('[role="article"]');
-                    articles.forEach(a => containers.push(a));
+                    articles.forEach(a => {
+                        if (!a.closest('[role="article"] [role="article"]') || a.matches('[role="feed"] > * [role="article"]:first-of-type')) {
+                            // Skip if this article is nested inside another article (it's a comment)
+                            var parent = a.parentElement;
+                            var isNested = false;
+                            while (parent) {
+                                if (parent.getAttribute && parent.getAttribute('role') === 'article') { isNested = true; break; }
+                                parent = parent.parentElement;
+                            }
+                            if (!isNested) containers.push(a);
+                        }
+                    });
 
                     for (const item of containers) {
                         try {

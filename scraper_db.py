@@ -443,6 +443,15 @@ def main():
                         continue
 
                     pid_str = str(post_id)
+                    # Filter out comments: base64 IDs starting with "Y29tbWVudDo" decode to "comment:"
+                    if not pid_str.isdigit():
+                        try:
+                            import base64
+                            decoded = base64.b64decode(pid_str + "==").decode("utf-8", errors="ignore")
+                            if decoded.startswith("comment"):
+                                continue
+                        except Exception:
+                            pass
 
                     msg = find_actual_message(s) or "[Media post - no text]"
                     user = find_actual_user(s)
@@ -594,7 +603,15 @@ def main():
                     const seen = new Set();
                     const feed = document.querySelector('[role="feed"]');
                     const containers = feed ? Array.from(feed.children) : [];
-                    document.querySelectorAll('[role="article"]').forEach(a => containers.push(a));
+                    document.querySelectorAll('[role="article"]').forEach(a => {
+                        var parent = a.parentElement;
+                        var isNested = false;
+                        while (parent) {
+                            if (parent.getAttribute && parent.getAttribute('role') === 'article') { isNested = true; break; }
+                            parent = parent.parentElement;
+                        }
+                        if (!isNested) containers.push(a);
+                    });
 
                     for (const item of containers) {
                         try {

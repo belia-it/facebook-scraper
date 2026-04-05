@@ -145,6 +145,12 @@ STORY_TYPENAMES = {
     "Story", "FeedUnit", "GroupFeedStory", "GroupPost",
     "UserPost", "FeedStory", "GroupCommerceProductItem"
 }
+# Typenames to EXCLUDE — these are not posts
+EXCLUDED_TYPENAMES = {
+    "Notification", "NotificationStory", "FeedbackReaction",
+    "PageLikeAction", "ProfileIntroCard", "StoryBucket",
+    "GroupMemberBadge", "GroupMemberProfile", "GroupQuestion",
+}
 TIME_FIELDS = {
     "creation_time", "timestamp", "publish_time", "created_time",
     "publish_timestamp", "created_timestamp"
@@ -168,6 +174,10 @@ def find_stories(obj):
         )
         has_post_id = "post_id" in obj or ("id" in obj and isinstance(obj.get("id"), str))
 
+        if typename in EXCLUDED_TYPENAMES:
+            for v in obj.values():
+                found.extend(find_stories(v))
+            return found
         is_story = typename in STORY_TYPENAMES
         if not is_story and has_time and has_actors:
             is_story = True
@@ -484,6 +494,17 @@ def main():
                     meta_url = find_key_recursive(s, "url")
                     if meta_url and "facebook.com" in str(meta_url):
                         url = meta_url
+
+                    # Filter: only accept posts related to our target group
+                    group_path = GROUP_URL.split("/groups/")[1].split("?")[0].split("/")[0] if "/groups/" in GROUP_URL else ""
+                    is_group_post = (
+                        group_path and group_path in url or
+                        group_path and group_path in str(find_key_recursive(s, "url") or "") or
+                        typename in ("GroupFeedStory", "GroupPost") or
+                        find_key_recursive(s, "group") is not None
+                    )
+                    if not is_group_post:
+                        continue
 
                     if pid_str not in captured and pid_str not in existing and url not in existing:
                         print(f"   [API] ✓ {user[:25]} | {post_date} {post_time} | {msg[:40]}")

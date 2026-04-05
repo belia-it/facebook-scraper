@@ -458,7 +458,7 @@ def main():
                         try:
                             import base64
                             decoded = base64.b64decode(pid_str + "==").decode("utf-8", errors="ignore")
-                            if decoded.startswith("comment"):
+                            if decoded.startswith("comment") or decoded.startswith("notification"):
                                 continue
                         except Exception:
                             pass
@@ -480,31 +480,11 @@ def main():
                     if not post_time:
                         post_time = ref_time.strftime('%H:%M')
 
-                    # Age filter
-                    try:
-                        post_dt = datetime.datetime.strptime(
-                            f"{post_date} {post_time}", "%Y-%m-%d %H:%M")
-                        if (ref_time - post_dt).total_seconds() / 60 > AGE_LIMIT_MINUTES:
-                            continue
-                    except Exception:
-                        pass
-
                     # Build URL
                     url = f"https://www.facebook.com/{post_id}"
                     meta_url = find_key_recursive(s, "url")
                     if meta_url and "facebook.com" in str(meta_url):
                         url = meta_url
-
-                    # Filter: only accept posts related to our target group
-                    group_path = GROUP_URL.split("/groups/")[1].split("?")[0].split("/")[0] if "/groups/" in GROUP_URL else ""
-                    is_group_post = (
-                        group_path and group_path in url or
-                        group_path and group_path in str(find_key_recursive(s, "url") or "") or
-                        typename in ("GroupFeedStory", "GroupPost") or
-                        find_key_recursive(s, "group") is not None
-                    )
-                    if not is_group_post:
-                        continue
 
                     if pid_str not in captured and pid_str not in existing and url not in existing:
                         print(f"   [API] ✓ {user[:25]} | {post_date} {post_time} | {msg[:40]}")
@@ -595,19 +575,13 @@ def main():
                 break
             time.sleep(5)
 
-        # Wait for feed
+        # Wait for feed content to render
         try:
-            page.wait_for_selector('[role="main"]', timeout=45000)
+            page.wait_for_selector('[role="main"], [role="feed"], [role="article"]', timeout=45000)
         except Exception:
-            print("   ⚠️ Timeout waiting for [role='main']. Refreshing...")
-            try:
-                page.reload(wait_until="commit", timeout=60000)
-                time.sleep(15)
-                page.wait_for_selector('[role="main"]', timeout=30000)
-            except Exception as re_e:
-                print(f"   ⚠️ Reload also failed: {re_e}. Continuing anyway.")
+            print("   ⚠️ Feed not detected yet. Continuing anyway...")
 
-        time.sleep(10)  # Hydration buffer for JS-heavy page
+        time.sleep(15)  # Hydration buffer — let JS render the feed
         try:
             page.screenshot(path="vps_db_check.png")
             print("   📸 Screenshot: vps_db_check.png")

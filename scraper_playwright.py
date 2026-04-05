@@ -235,7 +235,13 @@ def main():
                 blocks = parse_fb_response(text)
                 
                 STORY_TYPENAMES = {"Story", "FeedUnit", "GroupFeedStory", "GroupPost", "UserPost", "FeedStory", "GroupCommerceProductItem"}
-                EXCLUDED_TYPENAMES = {"Notification", "NotificationStory", "FeedbackReaction", "PageLikeAction", "ProfileIntroCard", "StoryBucket", "GroupMemberBadge", "GroupMemberProfile", "GroupQuestion"}
+                EXCLUDED_TYPENAMES = {
+                    "Notification", "NotificationStory", "FeedbackReaction",
+                    "PageLikeAction", "ProfileIntroCard", "StoryBucket",
+                    "GroupMemberBadge", "GroupMemberProfile", "GroupQuestion",
+                    "MarketplaceListing", "Event", "FundraiserStory",
+                    "AdStory", "SponsoredStory", "PageStory",
+                }
                 TIME_FIELDS = {"creation_time", "timestamp", "publish_time", "created_time", "publish_timestamp", "created_timestamp"}
 
                 def find_stories(obj):
@@ -343,7 +349,7 @@ def main():
                             try:
                                 import base64
                                 decoded = base64.b64decode(pid_str + "==").decode("utf-8", errors="ignore")
-                                if decoded.startswith("comment"):
+                                if decoded.startswith("comment") or decoded.startswith("notification"):
                                     continue
                             except Exception:
                                 pass
@@ -396,17 +402,6 @@ def main():
                         meta_url = find_key_recursive(s, "url")
                         if meta_url and "facebook.com" in str(meta_url):
                             url = meta_url
-
-                        # Filter: only accept posts related to our target group
-                        group_path = GROUP_URL.split("/groups/")[1].split("?")[0].split("/")[0] if "/groups/" in GROUP_URL else ""
-                        is_group_post = (
-                            (group_path and group_path in url) or
-                            (group_path and group_path in str(find_key_recursive(s, "url") or "")) or
-                            typename in ("GroupFeedStory", "GroupPost") or
-                            find_key_recursive(s, "group") is not None
-                        )
-                        if not is_group_post:
-                            continue
 
                         api_captured_posts[post_id] = {
                             'user': user,

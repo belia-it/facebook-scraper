@@ -31,6 +31,11 @@ TIMEZONE_OFFSET = int(os.getenv("TIMEZONE_OFFSET", "1"))
 MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "50"))
 AGE_LIMIT_MINUTES = int(os.getenv("AGE_LIMIT_MINUTES", "59"))
 
+# Extract group identifier for filtering (e.g., "covsousse" or numeric ID)
+_group_match = re.search(r'/groups/([^/?]+)', GROUP_URL)
+GROUP_SLUG = _group_match.group(1) if _group_match else None
+print(f"[Config] Group slug: {GROUP_SLUG}")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Database
 # ─────────────────────────────────────────────────────────────────────────────
@@ -486,6 +491,33 @@ def main():
                     if meta_url and "facebook.com" in str(meta_url):
                         url = meta_url
 
+                    # ── Group filter: only accept posts belonging to the target group ──
+                    is_group_post = False
+                    if GROUP_SLUG:
+                        # Check URL
+                        if GROUP_SLUG in url:
+                            is_group_post = True
+                        # Check story object for group references
+                        group_ref = find_key_recursive(s, "owning_profile")
+                        if not group_ref:
+                            group_ref = find_key_recursive(s, "target_group")
+                        if not group_ref:
+                            group_ref = find_key_recursive(s, "group")
+                        if group_ref and isinstance(group_ref, dict):
+                            gname = (group_ref.get("name") or "").lower()
+                            gurl = (group_ref.get("url") or "").lower()
+                            gid = str(group_ref.get("id") or "")
+                            if GROUP_SLUG.lower() in gname or GROUP_SLUG.lower() in gurl or GROUP_SLUG == gid:
+                                is_group_post = True
+                        # Also check if URL contains /groups/ at all
+                        if "/groups/" in url:
+                            is_group_post = True
+                    else:
+                        is_group_post = True  # no slug configured, accept all
+
+                    if not is_group_post:
+                        continue
+
                     if pid_str not in captured and pid_str not in existing and url not in existing:
                         print(f"   [API] ✓ {user[:25]} | {post_date} {post_time} | {msg[:40]}")
                         row = {
@@ -534,7 +566,7 @@ def main():
             viewport={"width": 1280, "height": 800}
         )
         page = ctx.new_page()
-        page.on("response", handle_response)
+        # NOTE: response handler is attached AFTER navigation to avoid capturing home feed data
 
         print(f"Navigating to {GROUP_URL} ...")
         try:
@@ -582,6 +614,12 @@ def main():
             print("   ⚠️ Feed not detected yet. Continuing anyway...")
 
         time.sleep(15)  # Hydration buffer — let JS render the feed
+
+        # NOW attach the response handler — we're on the group page, so all
+        # subsequent GraphQL responses will be group-related
+        page.on("response", handle_response)
+        print("   ✅ Response handler attached (group page confirmed).")
+
         try:
             page.screenshot(path="vps_db_check.png")
             print("   📸 Screenshot: vps_db_check.png")
@@ -649,6 +687,12 @@ def main():
 
                 new_count = 0
                 for dp in dom_posts:
+                    # Group filter: only accept posts with group URLs
+                    post_url = dp.get('url', '')
+                    if post_url and GROUP_SLUG:
+                        if '/groups/' not in post_url and GROUP_SLUG not in post_url:
+                            continue
+
                     norm_text = re.sub(r'\s+', '', dp['text'].lower())
                     dedup_key = f"{dp['user']}_{hashlib.md5(norm_text.encode()).hexdigest()}"
                     if dedup_key in dom_captured:
@@ -754,11 +798,33 @@ def main():
 
     print(f"Total merged: {len(all_posts)} ({len(dom_captured)} DOM + {api_only} API-only)")
     saved = 0
+    skipped_age = 0
+    skipped_group = 0
     for key, row in all_posts.items():
         url = row['post_url']
+
+        # ── Group filter (final check) ──
+        if GROUP_SLUG and url and not url.startswith('dom://'):
+            if '/groups/' not in url and GROUP_SLUG not in url:
+                skipped_group += 1
+                continue
+
+        # ── Age filter: skip posts older than AGE_LIMIT_MINUTES ──
+        try:
+            p_date = row.get('post_date')
+            p_time = row.get('post_time')
+            if p_date and p_time:
+                fmt = '%Y-%m-%d %H:%M:%S' if len(p_time) > 5 else '%Y-%m-%d %H:%M'
+                p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", fmt)
+                age_min = (ref_time - p_dt).total_seconds() / 60
+                if age_min > AGE_LIMIT_MINUTES:
+                    skipped_age += 1
+                    continue
+        except Exception:
+            pass  # if date can't be parsed, keep the post
+
         # Skip synthetic DOM URLs for dedup check
         if url.startswith('dom://'):
-            # Use text-based dedup
             norm = re.sub(r'\s+', '', row['post_text'].lower())
             text_key = f"{row['profile_name']}_{hashlib.md5(norm.encode()).hexdigest()}_{row['post_date']}"
             if text_key in existing:
@@ -774,6 +840,11 @@ def main():
             saved += 1
         except Exception as e:
             print(f"   [DB Error] {e}")
+
+    if skipped_age:
+        print(f"   Skipped {skipped_age} posts older than {AGE_LIMIT_MINUTES} minutes.")
+    if skipped_group:
+        print(f"   Skipped {skipped_group} posts not from target group.")
 
     conn.commit()
     conn.close()

@@ -25,6 +25,11 @@ TIMEZONE_OFFSET = int(os.getenv("TIMEZONE_OFFSET", "1")) # Default to UTC+1 for 
 MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "50"))
 AGE_LIMIT_MINUTES = int(os.getenv("AGE_LIMIT_MINUTES", "59"))
 
+# Extract group identifier for filtering
+_group_match = re.search(r'/groups/([^/?]+)', GROUP_URL)
+GROUP_SLUG = _group_match.group(1) if _group_match else None
+print(f"[Config] Group slug: {GROUP_SLUG}")
+
 SHEET_HEADERS = [
     "post_url", "post_time", "post_date", "calendar_week", "weekday", "profile_name",
     "gender", "offer_or_demand", "from_city", "from_area", "to_city", "to_area",
@@ -403,6 +408,16 @@ def main():
                         if meta_url and "facebook.com" in str(meta_url):
                             url = meta_url
 
+                        # ── Group filter: only accept group posts ──
+                        is_group_post = False
+                        if GROUP_SLUG:
+                            if GROUP_SLUG in url or "/groups/" in url:
+                                is_group_post = True
+                        else:
+                            is_group_post = True
+                        if not is_group_post:
+                            continue
+
                         api_captured_posts[post_id] = {
                             'user': user,
                             'text': msg,
@@ -443,7 +458,7 @@ def main():
             viewport={'width': 1280, 'height': 800}
         )
         page = context.new_page()
-        page.on("response", handle_response) # Attach Interceptor
+        # NOTE: response handler attached AFTER navigation to avoid capturing home feed
 
         print(f"2. Opening Group Feed: {GROUP_URL}")
         try:
@@ -517,7 +532,11 @@ def main():
                     print(f"   ⚠️ Reload attempt also failed: {re_e}")
             
             time.sleep(10) # Final hydration buffer
-            
+
+            # NOW attach response handler — we're on the group page
+            page.on("response", handle_response)
+            print("   ✅ Response handler attached (group page confirmed).")
+
             # Capture screenshot for visual verification on VPS
             try:
                 page.screenshot(path="vps_check.png")
@@ -616,6 +635,12 @@ def main():
                 for dp in dom_posts:
                     norm_text = re.sub(r'\s+', '', dp['text'].lower())
                     dedup_key = f"{dp['user']}_{hashlib.md5(norm_text.encode()).hexdigest()}"
+
+                    # Group filter: only accept posts with group URLs
+                    post_url = dp.get('url', '')
+                    if post_url and GROUP_SLUG:
+                        if '/groups/' not in post_url and GROUP_SLUG not in post_url:
+                            continue
 
                     if dedup_key not in dom_captured_posts:
                         dom_captured_posts[dedup_key] = {

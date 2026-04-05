@@ -155,6 +155,10 @@ EXCLUDED_TYPENAMES = {
     "Notification", "NotificationStory", "FeedbackReaction",
     "PageLikeAction", "ProfileIntroCard", "StoryBucket",
     "GroupMemberBadge", "GroupMemberProfile", "GroupQuestion",
+    "Comment", "Reply", "UFFeedback", "Feedback",
+    "MarketplaceListing", "Event", "FundraiserStory",
+    "AdStory", "SponsoredStory", "PageStory",
+    "GroupMallCategoryItem", "GroupMallProductItem",
 }
 TIME_FIELDS = {
     "creation_time", "timestamp", "publish_time", "created_time",
@@ -458,12 +462,14 @@ def main():
                         continue
 
                     pid_str = str(post_id)
-                    # Filter out comments: base64 IDs starting with "Y29tbWVudDo" decode to "comment:"
+                    # Filter out non-post IDs via base64 decode
                     if not pid_str.isdigit():
                         try:
                             import base64
                             decoded = base64.b64decode(pid_str + "==").decode("utf-8", errors="ignore")
-                            if decoded.startswith("comment") or decoded.startswith("notification"):
+                            skip_prefixes = ("comment", "notification", "feedback", "reaction",
+                                             "share", "reshare", "highlight", "mall_")
+                            if any(decoded.startswith(p) for p in skip_prefixes):
                                 continue
                         except Exception:
                             pass
@@ -491,31 +497,30 @@ def main():
                     if meta_url and "facebook.com" in str(meta_url):
                         url = meta_url
 
-                    # ── Group filter: only accept posts belonging to the target group ──
+                    # ── STRICT group filter: must reference our specific group ──
                     is_group_post = False
                     if GROUP_SLUG:
-                        # Check URL
-                        if GROUP_SLUG in url:
+                        slug_lower = GROUP_SLUG.lower()
+                        # Check URL contains /groups/covsousse
+                        if f"/groups/{slug_lower}" in url.lower():
                             is_group_post = True
                         # Check story object for group references
-                        group_ref = find_key_recursive(s, "owning_profile")
-                        if not group_ref:
-                            group_ref = find_key_recursive(s, "target_group")
-                        if not group_ref:
-                            group_ref = find_key_recursive(s, "group")
-                        if group_ref and isinstance(group_ref, dict):
-                            gname = (group_ref.get("name") or "").lower()
-                            gurl = (group_ref.get("url") or "").lower()
-                            gid = str(group_ref.get("id") or "")
-                            if GROUP_SLUG.lower() in gname or GROUP_SLUG.lower() in gurl or GROUP_SLUG == gid:
-                                is_group_post = True
-                        # Also check if URL contains /groups/ at all
-                        if "/groups/" in url:
-                            is_group_post = True
+                        for gkey in ("owning_profile", "target_group", "group"):
+                            group_ref = find_key_recursive(s, gkey)
+                            if group_ref and isinstance(group_ref, dict):
+                                gname = (group_ref.get("name") or "").lower()
+                                gurl = (group_ref.get("url") or "").lower()
+                                if slug_lower in gname or slug_lower in gurl:
+                                    is_group_post = True
+                                    # Also fix the URL to include group context
+                                    if f"/groups/{slug_lower}" not in url.lower():
+                                        url = f"https://www.facebook.com/groups/{GROUP_SLUG}/posts/{pid_str}"
+                                    break
                     else:
                         is_group_post = True  # no slug configured, accept all
 
                     if not is_group_post:
+                        print(f"   [API] ✗ REJECTED (not group): {user[:20]} | {url[:60]}")
                         continue
 
                     if pid_str not in captured and pid_str not in existing and url not in existing:
@@ -607,9 +612,20 @@ def main():
                 break
             time.sleep(5)
 
+        # Verify we're on the group page, re-navigate if needed
+        current_url = page.url
+        if GROUP_SLUG and GROUP_SLUG.lower() not in current_url.lower():
+            print(f"   ⚠️ Not on group page ({current_url[:60]}). Re-navigating...")
+            try:
+                page.goto(GROUP_URL, wait_until="commit", timeout=60000)
+                time.sleep(5)
+            except Exception as e:
+                print(f"   ❌ Re-navigation failed: {e}")
+
         # Wait for feed content to render
         try:
-            page.wait_for_selector('[role="main"], [role="feed"], [role="article"]', timeout=45000)
+            page.wait_for_selector('[role="feed"]', timeout=45000)
+            print("   ✅ Feed container detected.")
         except Exception:
             print("   ⚠️ Feed not detected yet. Continuing anyway...")
 
@@ -631,28 +647,24 @@ def main():
         def scrape_dom():
             """Extract posts from visible DOM using dual selectors."""
             try:
-                dom_posts = page.evaluate("""() => {
+                dom_posts = page.evaluate("""(groupSlug) => {
                     const posts = [];
                     const seen = new Set();
+
+                    // ONLY use [role="feed"] children — never standalone articles
                     const feed = document.querySelector('[role="feed"]');
-                    const containers = feed ? Array.from(feed.children) : [];
-                    document.querySelectorAll('[role="article"]').forEach(a => {
-                        var parent = a.parentElement;
-                        var isNested = false;
-                        while (parent) {
-                            if (parent.getAttribute && parent.getAttribute('role') === 'article') { isNested = true; break; }
-                            parent = parent.parentElement;
-                        }
-                        if (!isNested) containers.push(a);
-                    });
+                    if (!feed) return posts;
+                    const containers = Array.from(feed.children);
 
                     for (const item of containers) {
                         try {
+                            // AUTHOR
                             let user = '';
                             const headingLink = item.querySelector('h2 a, h3 a, h4 a, strong a, [data-ad-rendering-role="profile_name"] a');
                             if (headingLink) user = headingLink.textContent.trim();
                             if (!user || user === 'Nouvelles publications' || user === 'Recent posts') continue;
 
+                            // TEXT: longest [dir="auto"] block
                             let text = '';
                             const allDirAuto = item.querySelectorAll('[dir="auto"]');
                             let maxLen = 0;
@@ -661,37 +673,38 @@ def main():
                                 if (t.length > maxLen && t.length > 5) { maxLen = t.length; text = t; }
                             });
 
+                            // PERMALINK: must contain the group slug
                             let url = '';
                             const links = item.querySelectorAll('a[href]');
                             for (const link of links) {
-                                const href = link.getAttribute('href');
-                                if (href && (href.includes('/posts/') || href.includes('/permalink/') || href.includes('/p/'))) {
-                                    url = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
-                                    break;
+                                const href = link.getAttribute('href') || '';
+                                const full = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
+                                if (groupSlug && full.includes('/groups/' + groupSlug)) {
+                                    if (href.includes('/posts/') || href.includes('/permalink/') || href.includes('/p/')) {
+                                        url = full;
+                                        break;
+                                    }
                                 }
                             }
-                            if (!url && headingLink) {
-                                const href = headingLink.getAttribute('href');
-                                if (href) url = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
-                            }
+                            // HARD REQUIREMENT: must have a group URL — skip otherwise
+                            if (!url) continue;
 
                             const key = user + '|' + (text || '').substring(0, 50);
                             if (seen.has(key)) continue;
                             seen.add(key);
 
-                            posts.push({ user, text: text || '[Media post - no text]', url: url || '' });
+                            posts.push({ user, text: text || '[Media post - no text]', url });
                         } catch(e) {}
                     }
                     return posts;
-                }""")
+                }""", GROUP_SLUG or "")
 
                 new_count = 0
                 for dp in dom_posts:
-                    # Group filter: only accept posts with group URLs
+                    # URL is guaranteed to be a group URL by JS filter
                     post_url = dp.get('url', '')
-                    if post_url and GROUP_SLUG:
-                        if '/groups/' not in post_url and GROUP_SLUG not in post_url:
-                            continue
+                    if not post_url:
+                        continue
 
                     norm_text = re.sub(r'\s+', '', dp['text'].lower())
                     dedup_key = f"{dp['user']}_{hashlib.md5(norm_text.encode()).hexdigest()}"
@@ -702,7 +715,7 @@ def main():
                     post_time = ref_time.strftime('%H:%M')
 
                     row = {
-                        "post_url": dp['url'] or f"dom://{dedup_key}",
+                        "post_url": post_url,
                         "post_time": post_time, "post_date": post_date,
                         "calendar_week": str(ref_time.isocalendar()[1]),
                         "weekday": ref_time.strftime("%A"),
@@ -803,9 +816,9 @@ def main():
     for key, row in all_posts.items():
         url = row['post_url']
 
-        # ── Group filter (final check) ──
-        if GROUP_SLUG and url and not url.startswith('dom://'):
-            if '/groups/' not in url and GROUP_SLUG not in url:
+        # ── STRICT group filter (final check) ──
+        if GROUP_SLUG and url:
+            if f"/groups/{GROUP_SLUG.lower()}" not in url.lower():
                 skipped_group += 1
                 continue
 
@@ -823,16 +836,9 @@ def main():
         except Exception:
             pass  # if date can't be parsed, keep the post
 
-        # Skip synthetic DOM URLs for dedup check
-        if url.startswith('dom://'):
-            norm = re.sub(r'\s+', '', row['post_text'].lower())
-            text_key = f"{row['profile_name']}_{hashlib.md5(norm.encode()).hexdigest()}_{row['post_date']}"
-            if text_key in existing:
-                continue
-        else:
-            pid = extract_post_id(url)
-            if url in existing or (pid and pid in existing):
-                continue
+        pid = extract_post_id(url)
+        if url in existing or (pid and pid in existing):
+            continue
 
         try:
             upsert_post(conn, row)

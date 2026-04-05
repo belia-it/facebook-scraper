@@ -246,6 +246,8 @@ def main():
                     "GroupMemberBadge", "GroupMemberProfile", "GroupQuestion",
                     "MarketplaceListing", "Event", "FundraiserStory",
                     "AdStory", "SponsoredStory", "PageStory",
+                    "Comment", "Reply", "UFFeedback", "Feedback",
+                    "GroupMallCategoryItem", "GroupMallProductItem",
                 }
                 TIME_FIELDS = {"creation_time", "timestamp", "publish_time", "created_time", "publish_timestamp", "created_timestamp"}
 
@@ -354,7 +356,9 @@ def main():
                             try:
                                 import base64
                                 decoded = base64.b64decode(pid_str + "==").decode("utf-8", errors="ignore")
-                                if decoded.startswith("comment") or decoded.startswith("notification"):
+                                skip_prefixes = ("comment", "notification", "feedback", "reaction",
+                                                 "share", "reshare", "highlight", "mall_")
+                                if any(decoded.startswith(p) for p in skip_prefixes):
                                     continue
                             except Exception:
                                 pass
@@ -408,11 +412,21 @@ def main():
                         if meta_url and "facebook.com" in str(meta_url):
                             url = meta_url
 
-                        # ── Group filter: only accept group posts ──
+                        # ── STRICT group filter: must reference our specific group ──
                         is_group_post = False
                         if GROUP_SLUG:
-                            if GROUP_SLUG in url or "/groups/" in url:
+                            slug_lower = GROUP_SLUG.lower()
+                            if f"/groups/{slug_lower}" in url.lower():
                                 is_group_post = True
+                            # Also check story metadata for group references
+                            for gkey in ("owning_profile", "target_group", "group"):
+                                gref = find_key_recursive(s, gkey)
+                                if gref and isinstance(gref, dict):
+                                    gname = (gref.get("name") or "").lower()
+                                    gurl = (gref.get("url") or "").lower()
+                                    if slug_lower in gname or slug_lower in gurl:
+                                        is_group_post = True
+                                        break
                         else:
                             is_group_post = True
                         if not is_group_post:
@@ -516,11 +530,20 @@ def main():
             except Exception as bypass_e:
                 print(f"   ⚠️ Bypass logic encountered an issue: {bypass_e}")
 
-            # Wait for any post element or "main" role to appear
+            # Verify we're on the group page
+            current_url = page.url
+            if GROUP_SLUG and GROUP_SLUG.lower() not in current_url.lower():
+                print(f"   ⚠️ Not on group page ({current_url[:60]}). Re-navigating...")
+                try:
+                    page.goto(GROUP_URL, wait_until="commit", timeout=60000)
+                    time.sleep(5)
+                except Exception as e:
+                    print(f"   ❌ Re-navigation failed: {e}")
+
             print("   ⏳ Waiting for content to load (primary attempt)...")
             try:
                 # Try to wait for a story element or feed container
-                page.wait_for_selector('[role="main"]', timeout=45000)
+                page.wait_for_selector('[role="feed"]', timeout=45000)
             except:
                 print("   ⚠️ Timeout waiting for [role='main']. Refreshing with longer timeout...")
                 try:
@@ -558,89 +581,64 @@ def main():
         def scrape_dom_posts():
             """Extract posts from visible DOM feed items. Returns count of NEW posts found."""
             try:
-                dom_posts = page.evaluate("""() => {
+                dom_posts = page.evaluate("""(groupSlug) => {
                     const posts = [];
                     const seen = new Set();
 
-                    // Strategy 1: [role="feed"] > children (best for full browsers)
+                    // ONLY [role="feed"] children — no standalone articles
                     const feed = document.querySelector('[role="feed"]');
-                    const containers = feed ? Array.from(feed.children) : [];
-
-                    // Strategy 2: [role="article"] — only top-level (not comment articles nested inside posts)
-                    const articles = document.querySelectorAll('[role="article"]');
-                    articles.forEach(a => {
-                        if (!a.closest('[role="article"] [role="article"]') || a.matches('[role="feed"] > * [role="article"]:first-of-type')) {
-                            // Skip if this article is nested inside another article (it's a comment)
-                            var parent = a.parentElement;
-                            var isNested = false;
-                            while (parent) {
-                                if (parent.getAttribute && parent.getAttribute('role') === 'article') { isNested = true; break; }
-                                parent = parent.parentElement;
-                            }
-                            if (!isNested) containers.push(a);
-                        }
-                    });
+                    if (!feed) return posts;
+                    const containers = Array.from(feed.children);
 
                     for (const item of containers) {
                         try {
-                            // AUTHOR: heading links or strong links
                             let user = '';
                             const headingLink = item.querySelector('h2 a, h3 a, h4 a, strong a, [data-ad-rendering-role="profile_name"] a');
                             if (headingLink) user = headingLink.textContent.trim();
                             if (!user || user === 'Nouvelles publications' || user === 'Recent posts') continue;
 
-                            // TEXT: longest [dir="auto"] text block
                             let text = '';
                             const allDirAuto = item.querySelectorAll('[dir="auto"]');
                             let maxLen = 0;
                             allDirAuto.forEach(el => {
                                 const t = el.textContent.trim();
-                                if (t.length > maxLen && t.length > 5) {
-                                    maxLen = t.length;
-                                    text = t;
-                                }
+                                if (t.length > maxLen && t.length > 5) { maxLen = t.length; text = t; }
                             });
 
-                            // PERMALINK
+                            // PERMALINK: must contain the group slug
                             let url = '';
                             const links = item.querySelectorAll('a[href]');
                             for (const link of links) {
-                                const href = link.getAttribute('href');
-                                if (href && (href.includes('/posts/') || href.includes('/permalink/') || href.includes('/p/'))) {
-                                    url = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
-                                    break;
+                                const href = link.getAttribute('href') || '';
+                                const full = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
+                                if (groupSlug && full.includes('/groups/' + groupSlug)) {
+                                    if (href.includes('/posts/') || href.includes('/permalink/') || href.includes('/p/')) {
+                                        url = full;
+                                        break;
+                                    }
                                 }
                             }
-                            if (!url && headingLink) {
-                                const href = headingLink.getAttribute('href');
-                                if (href) url = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
-                            }
+                            // HARD REQUIREMENT: must have a group URL
+                            if (!url) continue;
 
-                            // Deduplicate within this scan
                             const key = user + '|' + (text || '').substring(0, 50);
                             if (seen.has(key)) continue;
                             seen.add(key);
 
-                            posts.push({
-                                user: user,
-                                text: text || '[Media post - no text]',
-                                url: url || ''
-                            });
+                            posts.push({ user, text: text || '[Media post - no text]', url });
                         } catch(e) {}
                     }
                     return posts;
-                }""")
+                }""", GROUP_SLUG or "")
 
                 new_count = 0
                 for dp in dom_posts:
                     norm_text = re.sub(r'\s+', '', dp['text'].lower())
                     dedup_key = f"{dp['user']}_{hashlib.md5(norm_text.encode()).hexdigest()}"
 
-                    # Group filter: only accept posts with group URLs
-                    post_url = dp.get('url', '')
-                    if post_url and GROUP_SLUG:
-                        if '/groups/' not in post_url and GROUP_SLUG not in post_url:
-                            continue
+                    # URL guaranteed by JS filter — skip if empty
+                    if not dp.get('url'):
+                        continue
 
                     if dedup_key not in dom_captured_posts:
                         dom_captured_posts[dedup_key] = {

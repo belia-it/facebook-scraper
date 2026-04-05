@@ -1,16 +1,23 @@
 """
-scraper_db.py — Independent Facebook scraper that writes directly to SQLite (api/posts.db).
-Completely separate from scraper_playwright.py (Google Sheets).
-Shares only: Playwright browser automation, env variables, facebook_auth.json.
+scraper_db.py — Robust Facebook scraper writing directly to SQLite (api/posts.db).
+Logic is a faithful port of scraper_playwright.py (which works correctly).
+Key fixes:
+  - find_actual_user(): tries actors[], actor{}, author{} in order – never grabs generic "name" fields
+  - find_actual_message(): uses message->text priority, filters out FB UI labels
+  - find_stories(): heuristic matching (typename OR time+actors) to catch more story formats
+  - DOM scrape: uses correct selectors [role="article"] exactly like scraper_playwright.py
+  - Date: parse_facebook_date() fully ported — handles Unix timestamps, relative strings, etc.
+  - Deduplication: checks both post_url and extracted post_id
 """
 
 import time
 import datetime
-import hashlib
 import os
 import json
 import re
+import hashlib
 import sqlite3
+import requests
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
 
@@ -18,18 +25,18 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(SCRIPT_DIR, "api", "posts.db")
 
 load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
-
 GROUP_URL = os.getenv("GROUP_URL", "https://www.facebook.com/groups/covsousse?sorting_setting=CHRONOLOGICAL")
 STORAGE_STATE = os.getenv("STORAGE_STATE", os.path.join(SCRIPT_DIR, "facebook_auth.json"))
 TIMEZONE_OFFSET = int(os.getenv("TIMEZONE_OFFSET", "1"))
 MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "50"))
 AGE_LIMIT_MINUTES = int(os.getenv("AGE_LIMIT_MINUTES", "59"))
 
-# ---------------------------------------------------------------------------
-# Database helpers
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Database
+# ─────────────────────────────────────────────────────────────────────────────
 
 def init_db():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS posts (
@@ -60,374 +67,705 @@ def init_db():
     return conn
 
 
-def get_existing_keys(conn):
-    """Build a set of known post_urls and text-hashes for deduplication."""
+def get_existing_ids(conn):
+    """Return a set of all known post_urls, numeric post IDs, and text-based dedup keys."""
     keys = set()
-    rows = conn.execute("SELECT post_url, profile_name, post_text, post_date FROM posts").fetchall()
-    for url, name, text, date in rows:
-        if url:
-            keys.add(url)
-            # Extract post ID from URL
-            m = re.search(r'/(?:posts|permalink|p)/(\d+)', url)
-            if m:
-                keys.add(m.group(1))
-        if text and text != "[Media post - no text]" and name:
-            h = hashlib.md5(re.sub(r'\s+', '', text.lower()).encode()).hexdigest()
-            keys.add(f"{name}_{h}_{date or ''}")
+    for row in conn.execute("SELECT post_url, profile_name, post_text, post_date FROM posts").fetchall():
+        url, profile, text, date_val = row
+        keys.add(url)
+        m = re.search(r'/(?:posts|permalink|p)/(\d+)', url or '')
+        if m:
+            keys.add(m.group(1))
+        # Text-based dedup key
+        if text and text != "[Media post - no text]":
+            norm = re.sub(r'\s+', '', (text or '').lower())
+            keys.add(f"{profile}_{hashlib.md5(norm.encode()).hexdigest()}_{date_val}")
     return keys
 
 
-def upsert_post(conn, row: dict):
+def upsert_post(conn, data: dict):
     conn.execute("""
         INSERT INTO posts (
             post_url, post_time, post_date, calendar_week, weekday,
-            profile_name, gender, offer_or_demand, from_city, from_area,
-            to_city, to_area, preferred_departure_time, price, nr_passengers,
-            post_text, post_text_english, post_text_french, scrape_timestamp
+            profile_name, post_text, scrape_timestamp
         ) VALUES (
             :post_url, :post_time, :post_date, :calendar_week, :weekday,
-            :profile_name, :gender, :offer_or_demand, :from_city, :from_area,
-            :to_city, :to_area, :preferred_departure_time, :price, :nr_passengers,
-            :post_text, :post_text_english, :post_text_french, :scrape_timestamp
+            :profile_name, :post_text, :scrape_timestamp
         )
         ON CONFLICT(post_url) DO UPDATE SET
-            post_time   = excluded.post_time,
-            post_date   = excluded.post_date,
-            profile_name = excluded.profile_name,
-            post_text   = excluded.post_text,
-            synced_at   = datetime('now')
-    """, row)
+            profile_name     = excluded.profile_name,
+            post_text        = excluded.post_text,
+            post_time        = excluded.post_time,
+            post_date        = excluded.post_date,
+            synced_at        = datetime('now')
+    """, data)
 
 
-# ---------------------------------------------------------------------------
-# Facebook scraping helpers (independent copy of extraction logic)
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Extraction helpers (ported from scraper_playwright.py)
+# ─────────────────────────────────────────────────────────────────────────────
 
-def get_deep(d, keys, default=None):
-    for k in keys:
-        if isinstance(d, dict):
-            d = d.get(k, default)
-        elif isinstance(d, list) and isinstance(k, int):
-            d = d[k] if k < len(d) else default
-        else:
-            return default
-    return d
-
-
-def extract_data_blocks(raw_text: str) -> list:
+def extract_data_blocks(raw_text):
+    """Extract all JSON data blocks starting with {"data": ...} from raw FB text."""
+    # FB sometimes prefixes with "for (;;);"
+    raw_text = raw_text.replace("for (;;);", "").strip()
     blocks = []
-    for line in raw_text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        for start in range(len(line)):
-            if line[start] == '{':
-                depth = 0
-                for end in range(start, len(line)):
-                    if line[end] == '{':
-                        depth += 1
-                    elif line[end] == '}':
-                        depth -= 1
-                    if depth == 0:
-                        try:
-                            obj = json.loads(line[start:end + 1])
-                            if isinstance(obj, dict):
-                                blocks.append(obj)
-                        except Exception:
-                            pass
-                        break
+    i = 0
+    n = len(raw_text)
+    while True:
+        idx = raw_text.find('"data"', i)
+        if idx == -1:
+            break
+        brace_start = raw_text.find('{', idx)
+        if brace_start == -1:
+            break
+        depth, end_idx = 0, -1
+        for j in range(brace_start, n):
+            if raw_text[j] == '{':
+                depth += 1
+            elif raw_text[j] == '}':
+                depth -= 1
+                if depth == 0:
+                    end_idx = j
+                    break
+        if end_idx != -1:
+            try:
+                block = json.loads(raw_text[brace_start:end_idx + 1])
+                if isinstance(block, dict):
+                    blocks.append(block)
+            except json.JSONDecodeError:
+                pass
+            i = end_idx + 1
+        else:
+            break
     return blocks
 
 
-def parse_facebook_date(date_str, ref_time=None):
-    if not date_str:
-        return None, None
-    if ref_time is None:
-        ref_time = datetime.datetime.now()
-    ref_time = ref_time - datetime.timedelta(hours=TIMEZONE_OFFSET)
-
-    date_str = date_str.strip()
-    time_match = re.search(r'(\d{1,2}):(\d{2})', date_str)
-    time_str = f"{int(time_match.group(1)):02d}:{time_match.group(2)}" if time_match else None
-
-    if re.match(r'^\d{1,2}/\d{1,2}/\d{4}', date_str):
-        parts = re.findall(r'\d+', date_str)
-        try:
-            d = datetime.date(int(parts[2]), int(parts[1]), int(parts[0]))
-            return d.strftime("%Y-%m-%d"), time_str
-        except Exception:
-            pass
-
-    low = date_str.lower()
-    if any(w in low for w in ['just now', "à l'instant", 'maintenant']):
-        return ref_time.strftime("%Y-%m-%d"), ref_time.strftime("%H:%M")
-    if 'min' in low:
-        nums = re.findall(r'\d+', date_str)
-        if nums:
-            t = ref_time - datetime.timedelta(minutes=int(nums[0]))
-            return t.strftime("%Y-%m-%d"), t.strftime("%H:%M")
-    if 'hr' in low or 'heure' in low or 'h ' in low:
-        nums = re.findall(r'\d+', date_str)
-        if nums:
-            t = ref_time - datetime.timedelta(hours=int(nums[0]))
-            return t.strftime("%Y-%m-%d"), t.strftime("%H:%M")
-    if 'hier' in low or 'yesterday' in low:
-        d = (ref_time - datetime.timedelta(days=1)).date()
-        return d.strftime("%Y-%m-%d"), time_str
-    if 'lundi' in low or 'monday' in low:
-        return _day_of_week(ref_time, 0), time_str
-    if 'mardi' in low or 'tuesday' in low:
-        return _day_of_week(ref_time, 1), time_str
-    if 'mercredi' in low or 'wednesday' in low:
-        return _day_of_week(ref_time, 2), time_str
-    if 'jeudi' in low or 'thursday' in low:
-        return _day_of_week(ref_time, 3), time_str
-    if 'vendredi' in low or 'friday' in low:
-        return _day_of_week(ref_time, 4), time_str
-    if 'samedi' in low or 'saturday' in low:
-        return _day_of_week(ref_time, 5), time_str
-    if 'dimanche' in low or 'sunday' in low:
-        return _day_of_week(ref_time, 6), time_str
-    return None, time_str
-
-
-def _day_of_week(ref, target_weekday):
-    diff = (ref.weekday() - target_weekday) % 7
-    if diff == 0:
-        diff = 7
-    return (ref - datetime.timedelta(days=diff)).strftime("%Y-%m-%d")
+STORY_TYPENAMES = {
+    "Story", "FeedUnit", "GroupFeedStory", "GroupPost",
+    "UserPost", "FeedStory", "GroupCommerceProductItem"
+}
+TIME_FIELDS = {
+    "creation_time", "timestamp", "publish_time", "created_time",
+    "publish_timestamp", "created_timestamp"
+}
 
 
 def find_stories(obj):
-    stories = []
+    """
+    Recursively find story-like objects.
+    Heuristic: matches typename OR (has timestamp AND has actor/actors/author).
+    This mirrors the logic in scraper_playwright.py exactly.
+    """
+    found = []
     if isinstance(obj, dict):
-        typename = obj.get('__typename', '')
-        if typename in ('Story', 'FeedUnit'):
-            stories.append(obj)
+        typename = obj.get("__typename")
+        has_time = any(k in obj for k in TIME_FIELDS)
+        has_actors = (
+            ("actors" in obj and isinstance(obj["actors"], list)) or
+            ("actor" in obj and isinstance(obj["actor"], dict)) or
+            ("author" in obj and isinstance(obj["author"], dict))
+        )
+        has_post_id = "post_id" in obj or ("id" in obj and isinstance(obj.get("id"), str))
+
+        is_story = typename in STORY_TYPENAMES
+        if not is_story and has_time and has_actors:
+            is_story = True
+        if not is_story and has_time and has_post_id:
+            is_story = True
+
+        if is_story:
+            found.append(obj)
+
         for v in obj.values():
-            stories.extend(find_stories(v))
+            found.extend(find_stories(v))
     elif isinstance(obj, list):
-        for item in obj:
-            stories.extend(find_stories(item))
-    return stories
+        for v in obj:
+            found.extend(find_stories(v))
+    return found
 
 
 def find_key_recursive(obj, key):
+    """Find first occurrence of key anywhere in nested dict/list."""
     if isinstance(obj, dict):
-        if key in obj:
+        if key in obj and obj[key]:
             return obj[key]
         for v in obj.values():
-            result = find_key_recursive(v, key)
-            if result is not None:
-                return result
+            res = find_key_recursive(v, key)
+            if res:
+                return res
     elif isinstance(obj, list):
-        for item in obj:
-            result = find_key_recursive(item, key)
-            if result is not None:
-                return result
+        for v in obj:
+            res = find_key_recursive(v, key)
+            if res:
+                return res
     return None
 
 
-def find_actual_message(story):
-    for path in [
-        ['comet_sections', 'content', 'story', 'message', 'text'],
-        ['message', 'text'],
-        ['body', 'text'],
-    ]:
-        val = get_deep(story, path)
-        if val:
-            return val
-    return find_key_recursive(story, 'message') if not isinstance(
-        find_key_recursive(story, 'message'), dict) else get_deep(
-        find_key_recursive(story, 'message'), ['text'])
+# FB UI labels we should NEVER return as post content
+_FB_INTERNAL_LABELS = {
+    "S", "e", "·", "J'aime", "Commenter", "Partager",
+    "Like", "Comment", "Share", "Ok", "J\u2019aime"
+}
 
 
-def find_actual_user(story):
-    for path in [
-        ['comet_sections', 'actor_photo', 'story', 'actors', 0, 'name'],
-        ['actors', 0, 'name'],
-        ['actor', 'name'],
-    ]:
-        val = get_deep(story, path)
-        if val:
-            return val
-    return find_key_recursive(story, 'name')
+def find_actual_message(s):
+    """
+    Extract the real post text.
+    Priority 1: message -> text  (most reliable)
+    Priority 2: recursive search for 'text' key, skipping FB internal labels
+    """
+    m = s.get("message")
+    if isinstance(m, dict) and "text" in m:
+        t = m["text"].strip()
+        if t and t not in _FB_INTERNAL_LABELS:
+            return t
+
+    def check_text(obj):
+        if isinstance(obj, dict):
+            if "text" in obj and isinstance(obj["text"], str):
+                t = obj["text"].strip()
+                if len(t) >= 10 and t not in _FB_INTERNAL_LABELS:
+                    return t
+            for v in obj.values():
+                res = check_text(v)
+                if res:
+                    return res
+        elif isinstance(obj, list):
+            for v in obj:
+                res = check_text(v)
+                if res:
+                    return res
+        return None
+
+    return check_text(s)
 
 
-def find_post_url(story):
-    for path in [
-        ['comet_sections', 'context', 'story', 'url'],
-        ['url'],
-    ]:
-        val = get_deep(story, path)
-        if val and 'facebook.com' in str(val):
-            return val
-    url_node = find_key_recursive(story, 'url')
-    return url_node if url_node and 'facebook.com' in str(url_node) else None
+def find_actual_user(s):
+    """
+    Extract the poster's name.
+    Checks actors[], actor{}, author{} — never falls back to generic name keys
+    which could be city names, labels, etc.
+    """
+    # Try actors list
+    actors = find_key_recursive(s, "actors")
+    if actors and isinstance(actors, list) and len(actors) > 0:
+        first = actors[0]
+        if isinstance(first, dict):
+            name = first.get("name")
+            if name and name not in ("Unknown User", ""):
+                return name
+
+    # Try singular actor
+    actor = find_key_recursive(s, "actor")
+    if actor and isinstance(actor, dict):
+        name = actor.get("name")
+        if name and name not in ("Unknown User", ""):
+            return name
+
+    # Try author
+    author = find_key_recursive(s, "author")
+    if author and isinstance(author, dict):
+        name = author.get("name")
+        if name and name not in ("Unknown User", ""):
+            return name
+
+    return "Unknown User"
 
 
-def find_numeric_time(story, key='creation_time'):
-    val = find_key_recursive(story, key)
-    if isinstance(val, (int, float)) and val > 1_000_000_000:
-        return val
+def find_numeric_time(obj, key):
+    """Find first numeric value for a given key anywhere in nested structure."""
+    if isinstance(obj, dict):
+        if key in obj:
+            v = obj[key]
+            if isinstance(v, (int, float)):
+                return v
+            if isinstance(v, str) and v.isdigit():
+                return int(v)
+        for child in obj.values():
+            res = find_numeric_time(child, key)
+            if res is not None:
+                return res
+    elif isinstance(obj, list):
+        for child in obj:
+            res = find_numeric_time(child, key)
+            if res is not None:
+                return res
     return None
 
 
-def parse_stories_to_rows(stories, ref_time):
-    """Convert a list of story dicts into structured row dicts for SQLite."""
-    rows = []
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def parse_facebook_date(date_str, ref_time=None):
+    """
+    Full port from scraper_playwright.py.
+    Handles Unix timestamps, relative strings ("8 min", "2 heures") and exact dates.
+    Returns (date_str, time_str, raw_str).
+    """
+    if not ref_time:
+        ref_time = datetime.datetime.now() + datetime.timedelta(hours=0)  # local time
 
-    for story in stories:
-        url = find_post_url(story)
-        if not url:
-            continue
+    if not date_str:
+        return ref_time.strftime('%Y-%m-%d'), ref_time.strftime('%H:%M'), ""
 
-        user = find_actual_user(story) or ""
-        message = find_actual_message(story) or "[Media post - no text]"
+    try:
+        if isinstance(date_str, (int, float)) or (
+                isinstance(date_str, str) and str(date_str).isdigit()):
+            ts = int(date_str)
+            dt_utc = datetime.datetime.utcfromtimestamp(ts)
+            target = dt_utc + datetime.timedelta(hours=TIMEZONE_OFFSET)
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M'), f"API_{ts}"
+    except Exception:
+        pass
 
-        # Try numeric creation_time first
-        epoch = find_numeric_time(story, 'creation_time')
-        if epoch:
-            dt = datetime.datetime.fromtimestamp(epoch) - datetime.timedelta(hours=TIMEZONE_OFFSET)
-            post_date = dt.strftime("%Y-%m-%d")
-            post_time = dt.strftime("%H:%M")
-        else:
-            raw_date = find_key_recursive(story, 'creation_time_string') or \
-                       find_key_recursive(story, 'timestamp_string') or ""
-            post_date, post_time = parse_facebook_date(str(raw_date), ref_time)
+    ds = str(date_str).lower().strip()
+    months = {
+        'janvier': 1, 'février': 2, 'mars': 3, 'avril': 4, 'mai': 5, 'juin': 6,
+        'juillet': 7, 'août': 8, 'septembre': 9, 'octobre': 10, 'novembre': 11, 'décembre': 12,
+        'janv': 1, 'févr': 2, 'sept': 9, 'oct': 10, 'nov': 11, 'déc': 12,
+        'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+        'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'dec': 12,
+    }
+    all_month_names = '|'.join(months.keys())
 
-        if not post_date:
-            post_date = ref_time.strftime("%Y-%m-%d")
+    try:
+        if ds in ('just now', 'now') or "l'instant" in ds:
+            return ref_time.strftime('%Y-%m-%d'), ref_time.strftime('%H:%M'), date_str
 
-        # Age filter
-        try:
-            post_dt = datetime.datetime.strptime(f"{post_date} {post_time or '00:00'}", "%Y-%m-%d %H:%M")
-            age_mins = (ref_time - post_dt).total_seconds() / 60
-            if age_mins > AGE_LIMIT_MINUTES:
-                continue
-        except Exception:
-            pass
+        exact_fr = re.search(
+            r'(\d{1,2})\s+(' + all_month_names + r')\s+(\d{4})\s+[àa]\s+(\d{1,2}):(\d{2})', ds)
+        if exact_fr:
+            day, m_name, year, h, m = exact_fr.groups()
+            target = datetime.datetime(int(year), months[m_name], int(day), int(h), int(m))
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M'), date_str
 
-        cw = datetime.datetime.strptime(post_date, "%Y-%m-%d").isocalendar()[1] if post_date else ""
-        wd = datetime.datetime.strptime(post_date, "%Y-%m-%d").strftime("%A") if post_date else ""
+        exact_en = re.search(
+            r'(' + all_month_names + r')\s+(\d{1,2}),?\s+(\d{4})\s+at\s+(\d{1,2}):(\d{2})', ds)
+        if exact_en:
+            m_name, day, year, h, m = exact_en.groups()
+            target = datetime.datetime(int(year), months[m_name], int(day), int(h), int(m))
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M'), date_str
 
-        rows.append({
-            "post_url": url,
-            "post_time": post_time,
-            "post_date": post_date,
-            "calendar_week": str(cw),
-            "weekday": wd,
-            "profile_name": user,
-            "gender": None,
-            "offer_or_demand": None,
-            "from_city": None,
-            "from_area": None,
-            "to_city": None,
-            "to_area": None,
-            "preferred_departure_time": None,
-            "price": None,
-            "nr_passengers": None,
-            "post_text": message,
-            "post_text_english": None,
-            "post_text_french": None,
-            "scrape_timestamp": now_str,
-        })
-    return rows
+        rel = re.search(
+            r'(\d+)\s*(minutes?|mins?|m|hours?|heures?|h|jours?|j|days?|d|seconds?|s)\b', ds)
+        if rel:
+            val, unit = rel.groups()
+            val = int(val)
+            if unit in ('min', 'mins', 'minute', 'minutes', 'm'):
+                target = ref_time - datetime.timedelta(minutes=val)
+            elif unit in ('h', 'hour', 'hours', 'heure', 'heures'):
+                target = ref_time - datetime.timedelta(hours=val)
+            elif unit in ('j', 'jour', 'jours', 'd', 'day', 'days'):
+                target = ref_time - datetime.timedelta(days=val)
+            elif unit in ('s', 'second', 'seconds'):
+                target = ref_time - datetime.timedelta(seconds=val)
+            else:
+                target = ref_time
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M'), date_str
+
+        if 'hier' in ds or 'yesterday' in ds:
+            time_match = re.search(r'(\d{1,2})[:h](\d{2})', ds)
+            if time_match:
+                h, m = time_match.groups()
+                target = (ref_time - datetime.timedelta(days=1)).replace(
+                    hour=int(h), minute=int(m), second=0)
+            else:
+                target = ref_time - datetime.timedelta(days=1)
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M'), date_str
+
+    except Exception as e:
+        print(f"   [Warning] Date parsing failed for '{date_str}': {e}")
+
+    return None, None, date_str
 
 
-# ---------------------------------------------------------------------------
-# Main scraper
-# ---------------------------------------------------------------------------
+def extract_post_id(url):
+    m = re.search(r'/(?:posts|permalink|p)/(\d+)', str(url))
+    return m.group(1) if m else None
 
-def extract_post_id(url_str):
-    m = re.search(r'/(?:posts|permalink|p)/(\d+)', url_str)
-    if m:
-        return m.group(1)
-    fb = re.search(r'(\d+)/?$', url_str)
-    return fb.group(1) if fb else url_str
 
+NOTIFIED_POSTS = set()
+
+
+def notify_api(post_id, data, ref_time):
+    """Push new post to the FastAPI WebSocket broadcast endpoint."""
+    if not post_id or post_id in NOTIFIED_POSTS:
+        return
+    text = (data.get('post_text') or '').lower()
+    type_tag = "OFFER" if any(
+        x in text for x in ["offre", "chauffeur", "dispo", "disponible", "partage", "offer"]
+    ) else "DEMAND" if any(
+        x in text for x in ["chercher", "demande", "besoin", "demand"]
+    ) else "UNKNOWN"
+
+    payload = {
+        "profile_name": data.get('profile_name', 'Unknown User'),
+        "post_date": data.get('post_date'),
+        "post_time": data.get('post_time'),
+        "post_text": data.get('post_text', ''),
+        "offer_or_demand": type_tag,
+        "post_url": data.get('post_url', '')
+    }
+    try:
+        requests.post("http://localhost:8000/api/internal/post-update",
+                      json=payload, timeout=2)
+        NOTIFIED_POSTS.add(post_id)
+        print(f"   [Live] Notified API: {post_id}")
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────────────────────
 
 def main():
+    print("=== scraper_db.py starting ===")
     conn = init_db()
-    existing_keys = get_existing_keys(conn)
-
+    existing = get_existing_ids(conn)
     ref_time = datetime.datetime.now()
-    captured_rows = []
-    intercepted_count = 0
+    captured = {}   # pid -> row dict
+    browser_alive = True   # flag to prevent response handler from running after close
 
+    # ── GraphQL interception ─────────────────────────────────────────────────
     def handle_response(response):
-        nonlocal intercepted_count
+        if not browser_alive:
+            return
+        if "graphql" not in response.url.lower() or response.status != 200:
+            return
         try:
-            if 'graphql' not in response.url:
-                return
-            text = response.text()
-            for block in extract_data_blocks(text):
-                stories = find_stories(block)
-                if stories:
-                    intercepted_count += len(stories)
-                    rows = parse_stories_to_rows(stories, ref_time)
-                    captured_rows.extend(rows)
-        except Exception:
-            pass
+            raw = response.text()
+            print(f"   [API] Intercepted GraphQL ({len(raw)} bytes): {response.url[:80]}")
+            for block in extract_data_blocks(raw):
+                for s in find_stories(block):
+                    post_id = s.get("post_id") or s.get("id")
+                    if not post_id:
+                        continue
 
+                    pid_str = str(post_id)
+
+                    msg = find_actual_message(s) or "[Media post - no text]"
+                    user = find_actual_user(s)
+
+                    # Extract timestamp
+                    creation_time = None
+                    for tf in TIME_FIELDS:
+                        val = find_numeric_time(s, tf)
+                        if val is not None:
+                            creation_time = val
+                            break
+
+                    post_date, post_time, _ = parse_facebook_date(creation_time, ref_time)
+                    if not post_date:
+                        post_date = ref_time.strftime('%Y-%m-%d')
+                    if not post_time:
+                        post_time = ref_time.strftime('%H:%M')
+
+                    # Age filter
+                    try:
+                        post_dt = datetime.datetime.strptime(
+                            f"{post_date} {post_time}", "%Y-%m-%d %H:%M")
+                        if (ref_time - post_dt).total_seconds() / 60 > AGE_LIMIT_MINUTES:
+                            continue
+                    except Exception:
+                        pass
+
+                    # Build URL
+                    url = f"https://www.facebook.com/{post_id}"
+                    meta_url = find_key_recursive(s, "url")
+                    if meta_url and "facebook.com" in str(meta_url):
+                        url = meta_url
+
+                    if pid_str not in captured and pid_str not in existing and url not in existing:
+                        print(f"   [API] ✓ {user[:25]} | {post_date} {post_time} | {msg[:40]}")
+                        row = {
+                            "post_url": url, "post_time": post_time, "post_date": post_date,
+                            "calendar_week": str(datetime.datetime.strptime(post_date, "%Y-%m-%d").isocalendar()[1]),
+                            "weekday": datetime.datetime.strptime(post_date, "%Y-%m-%d").strftime("%A"),
+                            "profile_name": user, "post_text": msg,
+                            "scrape_timestamp": ref_time.isoformat()
+                        }
+                        captured[pid_str] = row
+                        notify_api(pid_str, row, ref_time)
+
+        except Exception as e:
+            print(f"   [API Error] {e}")
+
+    # ── Browser ──────────────────────────────────────────────────────────────
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(storage_state=STORAGE_STATE)
+        # Validate auth
+        auth_path = STORAGE_STATE if os.path.exists(STORAGE_STATE) else None
+        if auth_path:
+            try:
+                with open(auth_path) as f:
+                    a = json.load(f)
+                if not a.get("cookies"):
+                    print("   [WARNING] Auth file has no cookies. Running unauthenticated.")
+                    auth_path = None
+                else:
+                    print(f"   Auth loaded: {len(a['cookies'])} cookies.")
+            except Exception as e:
+                print(f"   [WARNING] Auth file error: {e}. Running unauthenticated.")
+                auth_path = None
+        else:
+            print(f"   [WARNING] No auth file at {STORAGE_STATE}.")
+
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+        ctx = browser.new_context(
+            storage_state=auth_path,
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800}
+        )
         page = ctx.new_page()
         page.on("response", handle_response)
 
-        print(f"[DB Scraper] Navigating to {GROUP_URL}")
-        page.goto(GROUP_URL, timeout=60_000)
-        time.sleep(5)
-
-        # Bypass "Continue as" modal
-        for sel in ['[role="button"][tabindex="0"]', 'button:has-text("Continue")']:
+        print(f"Navigating to {GROUP_URL} ...")
+        try:
+            page.goto(GROUP_URL, wait_until="commit", timeout=120000)
+        except Exception as e:
+            print(f"❌ Navigation failed: {e}")
             try:
-                btn = page.query_selector(sel)
-                if btn and btn.is_visible():
-                    btn.click()
-                    time.sleep(2)
+                page.screenshot(path="vps_error.png")
+            except: pass
+            browser_alive = False
+            browser.close()
+            return
+
+        current_url = page.url
+        print(f"   Landed on: {current_url[:80]}")
+        if "login" in current_url.lower() or "checkpoint" in current_url.lower():
+            print("❌ Redirected to login/checkpoint. Session expired!")
+            try:
+                page.screenshot(path="vps_error.png")
+            except: pass
+            browser_alive = False
+            browser.close()
+            return
+
+        # Modal bypass — same as scraper_playwright.py
+        BYPASS_TEXTS = ["Continuer en tant que", "Continue as", "Continuar como"]
+        for attempt in range(3):
+            found = False
+            for txt in BYPASS_TEXTS:
+                target = page.get_by_text(txt, exact=False).first
+                if target.count() > 0:
+                    print(f"   Modal: clicking '{txt}'")
+                    target.click(force=True, timeout=5000)
+                    time.sleep(10)
+                    found = True
                     break
-            except Exception:
-                pass
+            if found:
+                break
+            time.sleep(5)
 
+        # Wait for feed
+        try:
+            page.wait_for_selector('[role="main"]', timeout=45000)
+        except Exception:
+            print("   ⚠️ Timeout waiting for [role='main']. Refreshing...")
+            try:
+                page.reload(wait_until="commit", timeout=60000)
+                time.sleep(15)
+                page.wait_for_selector('[role="main"]', timeout=30000)
+            except Exception as re_e:
+                print(f"   ⚠️ Reload also failed: {re_e}. Continuing anyway.")
+
+        time.sleep(10)  # Hydration buffer for JS-heavy page
+        try:
+            page.screenshot(path="vps_db_check.png")
+            print("   📸 Screenshot: vps_db_check.png")
+        except: pass
+
+        # ── DOM capture + Scroll loop ────────────────────────────────────────
+        dom_captured = {}  # dedup_key -> row dict
+
+        def scrape_dom():
+            """Extract posts from visible DOM using dual selectors."""
+            try:
+                dom_posts = page.evaluate("""() => {
+                    const posts = [];
+                    const seen = new Set();
+                    const feed = document.querySelector('[role="feed"]');
+                    const containers = feed ? Array.from(feed.children) : [];
+                    document.querySelectorAll('[role="article"]').forEach(a => containers.push(a));
+
+                    for (const item of containers) {
+                        try {
+                            let user = '';
+                            const headingLink = item.querySelector('h2 a, h3 a, h4 a, strong a, [data-ad-rendering-role="profile_name"] a');
+                            if (headingLink) user = headingLink.textContent.trim();
+                            if (!user || user === 'Nouvelles publications' || user === 'Recent posts') continue;
+
+                            let text = '';
+                            const allDirAuto = item.querySelectorAll('[dir="auto"]');
+                            let maxLen = 0;
+                            allDirAuto.forEach(el => {
+                                const t = el.textContent.trim();
+                                if (t.length > maxLen && t.length > 5) { maxLen = t.length; text = t; }
+                            });
+
+                            let url = '';
+                            const links = item.querySelectorAll('a[href]');
+                            for (const link of links) {
+                                const href = link.getAttribute('href');
+                                if (href && (href.includes('/posts/') || href.includes('/permalink/') || href.includes('/p/'))) {
+                                    url = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
+                                    break;
+                                }
+                            }
+                            if (!url && headingLink) {
+                                const href = headingLink.getAttribute('href');
+                                if (href) url = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
+                            }
+
+                            const key = user + '|' + (text || '').substring(0, 50);
+                            if (seen.has(key)) continue;
+                            seen.add(key);
+
+                            posts.push({ user, text: text || '[Media post - no text]', url: url || '' });
+                        } catch(e) {}
+                    }
+                    return posts;
+                }""")
+
+                new_count = 0
+                for dp in dom_posts:
+                    norm_text = re.sub(r'\s+', '', dp['text'].lower())
+                    dedup_key = f"{dp['user']}_{hashlib.md5(norm_text.encode()).hexdigest()}"
+                    if dedup_key in dom_captured:
+                        continue
+
+                    post_date = ref_time.strftime('%Y-%m-%d')
+                    post_time = ref_time.strftime('%H:%M')
+
+                    row = {
+                        "post_url": dp['url'] or f"dom://{dedup_key}",
+                        "post_time": post_time, "post_date": post_date,
+                        "calendar_week": str(ref_time.isocalendar()[1]),
+                        "weekday": ref_time.strftime("%A"),
+                        "profile_name": dp['user'],
+                        "post_text": dp['text'],
+                        "scrape_timestamp": ref_time.isoformat(),
+                        "_dedup_key": dedup_key
+                    }
+                    dom_captured[dedup_key] = row
+                    notify_api(dedup_key, row, ref_time)
+                    new_count += 1
+                return new_count
+            except Exception as e:
+                print(f"   [DOM Warning] {e}")
+                return 0
+
+        def enrich_dom_with_api():
+            """Enrich DOM posts with timestamps from API data."""
+            enriched = 0
+            for key, dom_row in dom_captured.items():
+                dom_norm = re.sub(r'\s+', '', dom_row['post_text'].lower())[:80]
+                for api_row in captured.values():
+                    api_norm = re.sub(r'\s+', '', api_row['post_text'].lower())[:80]
+                    if dom_norm == api_norm or (dom_row['profile_name'] == api_row['profile_name'] and len(dom_norm) > 10 and dom_norm[:40] == api_norm[:40]):
+                        dom_row['post_time'] = api_row['post_time']
+                        dom_row['post_date'] = api_row['post_date']
+                        dom_row['calendar_week'] = api_row['calendar_week']
+                        dom_row['weekday'] = api_row['weekday']
+                        if api_row['post_url'] and 'facebook.com' in api_row['post_url']:
+                            dom_row['post_url'] = api_row['post_url']
+                        enriched += 1
+                        break
+            return enriched
+
+        initial = scrape_dom()
+        if initial > 0:
+            print(f"   Initial DOM: {initial} posts.")
+
+        stall_count = 0
         for i in range(MAX_SCROLLS):
-            page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
-            time.sleep(2)
-            print(f"  Scroll {i+1}/{MAX_SCROLLS} | captured {len(captured_rows)}", end="\r")
+            prev_dom = len(dom_captured)
+            prev_api = len(captured)
 
+            for _ in range(3):
+                page.keyboard.press("PageDown")
+                time.sleep(1.5)
+            time.sleep(2)
+
+            scrape_dom()
+
+            if len(dom_captured) == prev_dom and len(captured) == prev_api:
+                stall_count += 1
+                time.sleep(3)
+                page.keyboard.press("PageUp")
+                time.sleep(1.5)
+                page.keyboard.press("PageDown")
+                time.sleep(1.5)
+                scrape_dom()
+                if stall_count >= 5:
+                    print(f"\n   Stop: Feed exhausted after {stall_count} stall batches.")
+                    break
+            else:
+                stall_count = 0
+
+            if i % 2 == 0:
+                print(f"   Scroll {i+1}/{MAX_SCROLLS} | DOM: {len(dom_captured)} | API: {len(captured)}")
+
+        enriched = enrich_dom_with_api()
+        print(f"   Enriched {enriched} DOM posts with API timestamps.")
+
+        browser_alive = False
         browser.close()
 
-    print(f"\n[DB Scraper] Intercepted {intercepted_count} stories, parsed {len(captured_rows)} rows.")
+    # ── Merge DOM + API, then save to SQLite ────────────────────────────────
+    # Start with DOM posts, then add API-only posts
+    all_posts = dict(dom_captured)
+    api_only = 0
+    for pid, api_row in captured.items():
+        api_norm = re.sub(r'\s+', '', api_row['post_text'].lower())
+        api_key = f"{api_row['profile_name']}_{hashlib.md5(api_norm.encode()).hexdigest()}"
+        already_in = api_key in all_posts
+        if not already_in:
+            for dom_row in dom_captured.values():
+                dom_norm = re.sub(r'\s+', '', dom_row['post_text'].lower())[:80]
+                if api_norm[:80] == dom_norm:
+                    already_in = True
+                    break
+        if not already_in and len(api_row['post_text']) > 1:
+            all_posts[api_key] = api_row
+            api_only += 1
+    if api_only:
+        print(f"   Added {api_only} API-only posts.")
 
-    # Deduplicate and save
+    print(f"Total merged: {len(all_posts)} ({len(dom_captured)} DOM + {api_only} API-only)")
     saved = 0
-    for row in captured_rows:
-        url = row["post_url"]
-        pid = extract_post_id(url)
-        if url in existing_keys or pid in existing_keys:
-            continue
-        text = row.get("post_text", "")
-        if text and text != "[Media post - no text]":
-            h = hashlib.md5(re.sub(r'\s+', '', text.lower()).encode()).hexdigest()
-            tk = f"{row['profile_name']}_{h}_{row['post_date'] or ''}"
-            if tk in existing_keys:
+    for key, row in all_posts.items():
+        url = row['post_url']
+        # Skip synthetic DOM URLs for dedup check
+        if url.startswith('dom://'):
+            # Use text-based dedup
+            norm = re.sub(r'\s+', '', row['post_text'].lower())
+            text_key = f"{row['profile_name']}_{hashlib.md5(norm.encode()).hexdigest()}_{row['post_date']}"
+            if text_key in existing:
                 continue
-            existing_keys.add(tk)
+        else:
+            pid = extract_post_id(url)
+            if url in existing or (pid and pid in existing):
+                continue
 
         try:
             upsert_post(conn, row)
+            existing.add(url)
             saved += 1
         except Exception as e:
-            print(f"  [DB] skip: {e}")
-
-        existing_keys.add(url)
-        existing_keys.add(pid)
+            print(f"   [DB Error] {e}")
 
     conn.commit()
     conn.close()
-    print(f"✅ Saved {saved} new posts to SQLite.")
+    print(f"✅ Done. Saved {saved} new posts to SQLite.")
 
 
 if __name__ == "__main__":

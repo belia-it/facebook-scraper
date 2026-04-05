@@ -5,6 +5,7 @@ import hashlib
 import os
 import json
 import re
+import requests
 from oauth2client.service_account import ServiceAccountCredentials
 from playwright.sync_api import sync_playwright
 from dotenv import load_dotenv
@@ -152,6 +153,37 @@ def parse_facebook_date(date_str, ref_time=None):
         print(f"   [Warning] Date parsing failed for '{date_str}': {e}")
 
     return None, None, date_str
+
+NOTIFIED_POSTS = set()
+
+def notify_api(post_id, data, now_run):
+    """Notify the FastAPI server about a new post to broadcast via WebSocket."""
+    if post_id in NOTIFIED_POSTS:
+        return
+    
+    from_date, from_time, _ = parse_facebook_date(data.get('postedAt'), now_run)
+    
+    # Real-time basic parsing for UI tags
+    text = data.get('text', '').lower()
+    type_tag = "OFFER" if any(x in text for x in ["offre", "chauffeur", "dispo", "disponible", "partage", "offer"]) else "DEMAND" if any(x in text for x in ["chercher", "demande", "besoin", "demand"]) else "UNKNOWN"
+    
+    payload = {
+        "profile_name": data.get('user', 'Unknown User'),
+        "post_date": from_date,
+        "post_time": from_time,
+        "post_text": data.get('text', ''),
+        "offer_or_demand": type_tag,
+        "post_url": data.get('url', '')
+    }
+    
+    try:
+        # Use localhost as the scraper and API run on the same VPS
+        requests.post("http://localhost:8000/api/internal/post-update", json=payload, timeout=2)
+        NOTIFIED_POSTS.add(post_id)
+        print(f"   [Live] Notified API about post: {post_id}")
+    except Exception as e:
+        # Silently fail if API is not reachable; scraper continues its work
+        pass
 
 def main():
     print("--- STARTING PLAYWRIGHT SCRAPER (API VERSION) ---")
@@ -356,6 +388,8 @@ def main():
                             'postedAt': creation_time,
                             'isFromApi': True
                         }
+                        # Notify API in real-time
+                        notify_api(post_id, api_captured_posts[post_id], now_run)
             except Exception as e:
                 print(f"   [Error API] Failed to parse block: {e}")
                 pass
@@ -477,122 +511,139 @@ def main():
             browser.close()
             return
 
-        # Define DOM scraping function so we can call it progressively
+        # Primary DOM scraping — extracts posts from visible feed elements
+        dom_captured_posts = {}  # dedup_key -> post data
+
         def scrape_dom_posts():
+            """Extract posts from visible DOM feed items. Returns count of NEW posts found."""
             try:
                 dom_posts = page.evaluate("""() => {
                     const posts = [];
-                    // Facebook renders posts inside [role="article"] elements
+                    const seen = new Set();
+
+                    // Strategy 1: [role="feed"] > children (best for full browsers)
+                    const feed = document.querySelector('[role="feed"]');
+                    const containers = feed ? Array.from(feed.children) : [];
+
+                    // Strategy 2: [role="article"] (works in headless/degraded pages)
                     const articles = document.querySelectorAll('[role="article"]');
-                    articles.forEach(article => {
+                    articles.forEach(a => containers.push(a));
+
+                    for (const item of containers) {
                         try {
-                            // Extract post URL from timestamp links
-                            const links = article.querySelectorAll('a[href*="/groups/"][href*="/posts/"], a[href*="/permalink/"]');
+                            // AUTHOR: heading links or strong links
+                            let user = '';
+                            const headingLink = item.querySelector('h2 a, h3 a, h4 a, strong a, [data-ad-rendering-role="profile_name"] a');
+                            if (headingLink) user = headingLink.textContent.trim();
+                            if (!user || user === 'Nouvelles publications' || user === 'Recent posts') continue;
+
+                            // TEXT: longest [dir="auto"] text block
+                            let text = '';
+                            const allDirAuto = item.querySelectorAll('[dir="auto"]');
+                            let maxLen = 0;
+                            allDirAuto.forEach(el => {
+                                const t = el.textContent.trim();
+                                if (t.length > maxLen && t.length > 5) {
+                                    maxLen = t.length;
+                                    text = t;
+                                }
+                            });
+
+                            // PERMALINK
                             let url = '';
-                            let timeText = '';
+                            const links = item.querySelectorAll('a[href]');
                             for (const link of links) {
                                 const href = link.getAttribute('href');
-                                if (href && (href.includes('/posts/') || href.includes('/permalink/'))) {
+                                if (href && (href.includes('/posts/') || href.includes('/permalink/') || href.includes('/p/'))) {
                                     url = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
-                                    // The timestamp is often in a sibling or child of the link
-                                    const ariaLabel = link.getAttribute('aria-label');
-                                    if (ariaLabel) timeText = ariaLabel;
                                     break;
                                 }
                             }
-                            if (!url) return;
-
-                            // Extract user name from the first strong/heading link
-                            let user = '';
-                            const userLink = article.querySelector('strong a, h3 a, h4 a, [data-ad-rendering-role="profile_name"] a');
-                            if (userLink) user = userLink.textContent.trim();
-
-                            // Extract post text from the main content area
-                            let text = '';
-                            const textEl = article.querySelector('[data-ad-comet-preview="message"], [data-ad-preview="message"]');
-                            if (textEl) {
-                                text = textEl.textContent.trim();
-                            } else {
-                                // Fallback: look for the largest text block
-                                const divs = article.querySelectorAll('div[dir="auto"]');
-                                let maxLen = 0;
-                                divs.forEach(d => {
-                                    const t = d.textContent.trim();
-                                    if (t.length > maxLen && t.length > 5) {
-                                        maxLen = t.length;
-                                        text = t;
-                                    }
-                                });
+                            if (!url && headingLink) {
+                                const href = headingLink.getAttribute('href');
+                                if (href) url = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
                             }
 
-                            if (user || text) {
-                                posts.push({ url, user: user || 'Unknown User', text: text || '[Media post - no text]', timeText });
-                            }
+                            // Deduplicate within this scan
+                            const key = user + '|' + (text || '').substring(0, 50);
+                            if (seen.has(key)) continue;
+                            seen.add(key);
+
+                            posts.push({
+                                user: user,
+                                text: text || '[Media post - no text]',
+                                url: url || ''
+                            });
                         } catch(e) {}
-                    });
+                    }
                     return posts;
                 }""")
 
-                dom_added = 0
+                new_count = 0
                 for dp in dom_posts:
-                    # Generate a post_id from URL
-                    post_id_match = re.search(r'/posts/(\d+)', dp['url']) or re.search(r'/permalink/(\d+)', dp['url'])
-                    if not post_id_match:
-                        continue
-                    post_id = post_id_match.group(1)
+                    norm_text = re.sub(r'\s+', '', dp['text'].lower())
+                    dedup_key = f"{dp['user']}_{hashlib.md5(norm_text.encode()).hexdigest()}"
 
-                    if post_id not in api_captured_posts:
-                        # Parse time from aria-label if available
-                        posted_at = None
-                        if dp.get('timeText'):
-                            p_date, p_time, _ = parse_facebook_date(dp['timeText'], now_run)
-                            if p_date and p_time:
-                                posted_at = dp['timeText']
-
-                        api_captured_posts[post_id] = {
+                    if dedup_key not in dom_captured_posts:
+                        dom_captured_posts[dedup_key] = {
                             'user': dp['user'],
                             'text': dp['text'],
                             'url': dp['url'],
-                            'postedAt': posted_at,
-                            'isFromApi': False
+                            'postedAt': None,
+                            'isFromApi': False,
                         }
-                        dom_added += 1
-                return dom_added
+                        notify_api(dedup_key, dom_captured_posts[dedup_key], now_run)
+                        new_count += 1
+                return new_count
             except Exception as dom_e:
-                print(f"   [Warning] Continuous DOM scan failed: {dom_e}")
+                print(f"   [Warning] DOM scan failed: {dom_e}")
                 return 0
 
-        # Scroll Loop
-        print("3. Scrolling for API Interception and extracting DOM elements...")
+        def enrich_dom_with_api():
+            """Enrich DOM posts with timestamps from GraphQL API data."""
+            enriched = 0
+            for key, dom_post in dom_captured_posts.items():
+                if dom_post['postedAt'] is not None:
+                    continue
+                dom_norm = re.sub(r'\s+', '', dom_post['text'].lower())[:80]
+                for api_post in api_captured_posts.values():
+                    api_norm = re.sub(r'\s+', '', api_post['text'].lower())[:80]
+                    if dom_norm == api_norm or (dom_post['user'] == api_post['user'] and len(dom_norm) > 10 and dom_norm[:40] == api_norm[:40]):
+                        dom_post['postedAt'] = api_post['postedAt']
+                        if api_post.get('url') and '/groups/' in api_post.get('url', ''):
+                            dom_post['url'] = api_post['url']
+                        enriched += 1
+                        break
+            return enriched
+
+        # Scroll Loop — DOM-primary with API enrichment
+        print("3. Scrolling and extracting posts from DOM...")
         initial_dom = scrape_dom_posts()
         if initial_dom > 0:
             print(f"   Initial DOM scan captured {initial_dom} posts.")
 
         stall_count = 0
         for s in range(MAX_SCROLLS):
-            prev_count = len(api_captured_posts)
+            prev_dom = len(dom_captured_posts)
+            prev_api = len(api_captured_posts)
             
-            # Progressive smooth scroll instead of jumping to end
-            # Send 'PageDown' multiple times to slowly trigger lazy loading
             for _ in range(3):
                 page.keyboard.press("PageDown")
                 time.sleep(1.5)
             
-            # Allow time for API responses to fire
-            time.sleep(2) 
+            time.sleep(2)
 
-            # Continuously scrape the DOM during scrolling to catch posts before they unmount
             scrape_dom_posts()
 
-            # Adaptive wait: if no new posts captured, wait extra for slow responses or DOM mounting
-            if len(api_captured_posts) == prev_count:
+            # Stall = neither DOM nor API found anything new
+            if len(dom_captured_posts) == prev_dom and len(api_captured_posts) == prev_api:
                 stall_count += 1
-                # Try a gentle scroll up and down to trigger intersection observers just in case
                 time.sleep(3)
                 page.keyboard.press("PageUp")
                 time.sleep(1.5)
                 page.keyboard.press("PageDown")
                 time.sleep(1.5)
+                scrape_dom_posts()
 
                 if stall_count >= 5:
                     print(f"   Stop: No new posts for {stall_count} consecutive scroll batches. Feed exhausted.")
@@ -600,51 +651,66 @@ def main():
             else:
                 stall_count = 0
 
-            # Check age of latest captured posts to see if we should stop
-            older_than_limit = 0
-            for p_dict in api_captured_posts.values():
-                try:
-                    p_date, p_time, _ = parse_facebook_date(p_dict['postedAt'], now_run)
-                    if p_date and p_time:
-                        p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", '%Y-%m-%d %H:%M:%S')
-                        if (now_run - p_dt).total_seconds() / 60 > AGE_LIMIT_MINUTES:
-                            older_than_limit += 1
-                except Exception as e:
-                    pass
-
-            if older_than_limit >= 8:
-                print(f"   Stop: Found {older_than_limit} posts older than {AGE_LIMIT_MINUTES} min. Stopping.")
-                break
-
             if s % 2 == 0:
-                print(f"   ... Scroll batch {s+1}/{MAX_SCROLLS}, total captured: {len(api_captured_posts)} posts.")
+                print(f"   ... Scroll batch {s+1}/{MAX_SCROLLS}, DOM: {len(dom_captured_posts)} posts, API: {len(api_captured_posts)} stories.")
 
-        print(f"3b. Navigation complete. Captured {len(api_captured_posts)} total posts (API + DOM).")
+        # Enrich DOM posts with API timestamps
+        enriched = enrich_dom_with_api()
+        print(f"3b. Navigation complete. DOM: {len(dom_captured_posts)} posts, API enriched: {enriched}.")
 
-        # Refresh session state to keep cookies fresh if we at least reached the stage of scrolling
+        # Refresh session state — preserve critical auth cookies
         try:
             print(f"   💾 Refreshing session state in {STORAGE_STATE}...")
-            context.storage_state(path=STORAGE_STATE)
+            new_state = context.storage_state()
+            new_cookies = new_state.get("cookies", [])
+            new_names = {c["name"] for c in new_cookies}
+            CRITICAL_COOKIES = {"c_user", "xs", "datr", "sb", "fr"}
+            missing = CRITICAL_COOKIES - new_names
+            if missing:
+                print(f"   ⚠️ Session refresh missing critical cookies: {missing}. Keeping old auth file.")
+            else:
+                context.storage_state(path=STORAGE_STATE)
+                print(f"   ✅ Session refreshed with {len(new_cookies)} cookies.")
         except Exception as st_e:
             print(f"   ⚠️ Failed to save session state: {st_e}")
 
         browser.close()
 
     # 4. FINAL FILTERING AND UPLOAD
-    print("4. Processing intercepted data...")
-    all_captured = list(api_captured_posts.values())
-    
-    # Deduplicate and filter by age limit
+    print("4. Processing captured data...")
+    # Merge: DOM posts + API posts that DOM missed
+    all_captured = dict(dom_captured_posts)  # start with DOM posts
+    api_only_added = 0
+    for api_id, api_post in api_captured_posts.items():
+        api_norm = re.sub(r'\s+', '', api_post['text'].lower())
+        api_key = f"{api_post['user']}_{hashlib.md5(api_norm.encode()).hexdigest()}"
+        # Check if this API post already matched a DOM post (by text similarity)
+        already_in = api_key in all_captured
+        if not already_in:
+            # Also check by fuzzy text match against DOM posts
+            for dom_post in dom_captured_posts.values():
+                dom_norm = re.sub(r'\s+', '', dom_post['text'].lower())[:80]
+                if api_norm[:80] == dom_norm:
+                    already_in = True
+                    break
+        if not already_in and len(api_post['text']) > 1:
+            all_captured[api_key] = api_post
+            api_only_added += 1
+    if api_only_added > 0:
+        print(f"   Added {api_only_added} API-only posts not found in DOM.")
+
+    # Filter by age limit (posts with timestamps) or include if no timestamp (visible on page = recent)
     final_posts = []
-    for p in all_captured:
+    for p in all_captured.values():
         try:
             if p['postedAt'] is None:
-                # DOM-scraped posts with no timestamp — include them since they were visible on the page
                 final_posts.append(p)
                 continue
 
             p_date, p_time, _ = parse_facebook_date(p['postedAt'], now_run)
-            if not p_date or not p_time: continue
+            if not p_date or not p_time:
+                final_posts.append(p)
+                continue
 
             p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", '%Y-%m-%d %H:%M:%S')
             age_min = (now_run - p_dt).total_seconds() / 60
@@ -657,12 +723,15 @@ def main():
         print(f"⚠️ No posts found in the last {AGE_LIMIT_MINUTES} minutes.")
         return
 
-    print(f"✅ Success! Found {len(final_posts)} accurate posts via API.")
+    print(f"✅ Success! Found {len(final_posts)} posts ({len(dom_captured_posts)} DOM + {api_only_added} API-only).")
     
     # Formating for Sheets
     formatted_rows = []
     for p in final_posts:
-        p_date, p_time, _ = parse_facebook_date(p['postedAt'], now_run)
+        if p['postedAt'] is not None:
+            p_date, p_time, _ = parse_facebook_date(p['postedAt'], now_run)
+        else:
+            p_date, p_time = now_run.strftime('%Y-%m-%d'), now_run.strftime('%H:%M:%S')
         if not p_date or not p_time:
             continue
         post_dt = datetime.datetime.strptime(p_date, '%Y-%m-%d')

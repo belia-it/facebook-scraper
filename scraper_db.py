@@ -74,7 +74,8 @@ def init_db():
             post_text_english         TEXT,
             post_text_french          TEXT,
             scrape_timestamp          TEXT,
-            synced_at                 TEXT DEFAULT (datetime('now'))
+            synced_at                 TEXT DEFAULT (datetime('now')),
+            metadata                  TEXT
         )
     """)
     conn.execute("""
@@ -115,16 +116,17 @@ def upsert_post(conn, data: dict):
     conn.execute("""
         INSERT INTO posts (
             post_url, post_time, post_date, calendar_week, weekday,
-            profile_name, post_text, scrape_timestamp
+            profile_name, post_text, scrape_timestamp, metadata
         ) VALUES (
             :post_url, :post_time, :post_date, :calendar_week, :weekday,
-            :profile_name, :post_text, :scrape_timestamp
+            :profile_name, :post_text, :scrape_timestamp, :metadata
         )
         ON CONFLICT(post_url) DO UPDATE SET
             profile_name     = excluded.profile_name,
             post_text        = excluded.post_text,
             post_time        = excluded.post_time,
             post_date        = excluded.post_date,
+            metadata         = excluded.metadata,
             synced_at        = datetime('now')
     """, data)
 
@@ -539,12 +541,34 @@ def main():
                             continue
 
                 if pid_str not in existing and url not in existing:
+                    # Build metadata JSON from story object (truncate large fields)
+                    try:
+                        meta = {}
+                        for mk in ("__typename", "post_id", "id", "creation_time", "timestamp",
+                                    "url", "tracking", "feedback", "comet_sections"):
+                            if mk in s:
+                                val = s[mk]
+                                if isinstance(val, (dict, list)):
+                                    val_str = json.dumps(val, ensure_ascii=False)
+                                    if len(val_str) > 500:
+                                        val = val_str[:500] + "..."
+                                meta[mk] = val
+                        # Add actors/author info
+                        for ak in ("actors", "actor", "author"):
+                            av = s.get(ak)
+                            if av:
+                                meta[ak] = av
+                        meta_json = json.dumps(meta, ensure_ascii=False, default=str)
+                    except:
+                        meta_json = None
+
                     row = {
                         "post_url": url, "post_time": post_time, "post_date": post_date,
                         "calendar_week": str(datetime.datetime.strptime(post_date, "%Y-%m-%d").isocalendar()[1]),
                         "weekday": datetime.datetime.strptime(post_date, "%Y-%m-%d").strftime("%A"),
                         "profile_name": user, "post_text": msg,
-                        "scrape_timestamp": ref_time.isoformat()
+                        "scrape_timestamp": ref_time.isoformat(),
+                        "metadata": meta_json
                     }
                     captured[pid_str] = row
                     count += 1

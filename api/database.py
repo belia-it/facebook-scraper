@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS posts (
     post_text_english       TEXT,
     post_text_french        TEXT,
     scrape_timestamp        TEXT,
-    synced_at               TEXT DEFAULT (datetime('now'))
+    synced_at               TEXT DEFAULT (datetime('now')),
+    metadata                TEXT
 );
 """
 

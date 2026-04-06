@@ -28,7 +28,7 @@ load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
 GROUP_URL = os.getenv("GROUP_URL", "https://www.facebook.com/groups/covsousse?sorting_setting=CHRONOLOGICAL")
 STORAGE_STATE = os.getenv("STORAGE_STATE", os.path.join(SCRIPT_DIR, "facebook_auth.json"))
 TIMEZONE_OFFSET = int(os.getenv("TIMEZONE_OFFSET", "1"))
-MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "50"))
+MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "20"))
 AGE_LIMIT_MINUTES = int(os.getenv("AGE_LIMIT_MINUTES", "59"))
 
 # Extract group identifier for filtering (e.g., "covsousse" or numeric ID)
@@ -320,7 +320,7 @@ def parse_facebook_date(date_str, ref_time=None):
     Returns (date_str, time_str, raw_str).
     """
     if not ref_time:
-        ref_time = datetime.datetime.now() + datetime.timedelta(hours=0)  # local time
+        ref_time = datetime.datetime.utcnow() + datetime.timedelta(hours=TIMEZONE_OFFSET) + datetime.timedelta(hours=0)  # local time
 
     if not date_str:
         return ref_time.strftime('%Y-%m-%d'), ref_time.strftime('%H:%M'), ""
@@ -442,390 +442,240 @@ def main():
     print("=== scraper_db.py starting ===")
     conn = init_db()
     existing = get_existing_ids(conn)
-    ref_time = datetime.datetime.now()
-    captured = {}   # pid -> row dict
-    browser_alive = True   # flag to prevent response handler from running after close
+    ref_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)
+    ref_time = ref_time.replace(tzinfo=None)
+    print(f"   ref_time (UTC+{TIMEZONE_OFFSET}): {ref_time.strftime('%Y-%m-%d %H:%M')}")
 
-    # ── GraphQL interception ─────────────────────────────────────────────────
-    def handle_response(response):
-        if not browser_alive:
-            return
-        if "graphql" not in response.url.lower() or response.status != 200:
-            return
-        try:
-            raw = response.text()
-            print(f"   [API] Intercepted GraphQL ({len(raw)} bytes): {response.url[:80]}")
-            for block in extract_data_blocks(raw):
-                for s in find_stories(block):
-                    post_id = s.get("post_id") or s.get("id")
-                    if not post_id:
-                        continue
+    captured = {}
 
-                    pid_str = str(post_id)
-                    # Filter out non-post IDs via base64 decode
-                    if not pid_str.isdigit():
-                        try:
-                            import base64
-                            decoded = base64.b64decode(pid_str + "==").decode("utf-8", errors="ignore")
-                            skip_prefixes = ("comment", "notification", "feedback", "reaction",
-                                             "share", "reshare", "highlight", "mall_")
-                            if any(decoded.startswith(p) for p in skip_prefixes):
-                                continue
-                        except Exception:
-                            pass
+    def process_raw_data(raw_text):
+        """Extract posts from raw text (HTML or JSON)."""
+        count = 0
+        for block in extract_data_blocks(raw_text):
+            for s in find_stories(block):
+                post_id = s.get("post_id") or s.get("id")
+                if not post_id:
+                    continue
+                pid_str = str(post_id)
+                if pid_str in captured:
+                    continue
 
-                    msg = find_actual_message(s) or "[Media post - no text]"
-                    user = find_actual_user(s)
+                if not pid_str.isdigit():
+                    try:
+                        import base64
+                        decoded = base64.b64decode(pid_str + "==").decode("utf-8", errors="ignore")
+                        if any(decoded.startswith(p) for p in ("comment", "notification", "feedback", "reaction", "share")):
+                            continue
+                    except:
+                        pass
 
-                    # Extract timestamp
-                    creation_time = None
-                    for tf in TIME_FIELDS:
-                        val = find_numeric_time(s, tf)
-                        if val is not None:
-                            creation_time = val
-                            break
+                msg = find_actual_message(s) or "[Media post - no text]"
+                user = find_actual_user(s)
 
-                    post_date, post_time, _ = parse_facebook_date(creation_time, ref_time)
-                    if not post_date:
-                        post_date = ref_time.strftime('%Y-%m-%d')
-                    if not post_time:
-                        post_time = ref_time.strftime('%H:%M')
+                creation_time = None
+                for tf in TIME_FIELDS:
+                    val = find_numeric_time(s, tf)
+                    if val is not None:
+                        creation_time = val
+                        break
 
-                    # Build URL
-                    url = f"https://www.facebook.com/{post_id}"
-                    meta_url = find_key_recursive(s, "url")
-                    if meta_url and "facebook.com" in str(meta_url):
-                        url = meta_url
-
-                    # ── STRICT group filter: must reference our specific group ──
-                    is_group_post = False
-                    if GROUP_SLUG:
-                        slug_lower = GROUP_SLUG.lower()
-                        # Check URL contains /groups/covsousse
-                        if f"/groups/{slug_lower}" in url.lower():
-                            is_group_post = True
-                        # Check story object for group references
-                        for gkey in ("owning_profile", "target_group", "group"):
-                            group_ref = find_key_recursive(s, gkey)
-                            if group_ref and isinstance(group_ref, dict):
-                                gname = (group_ref.get("name") or "").lower()
-                                gurl = (group_ref.get("url") or "").lower()
-                                if slug_lower in gname or slug_lower in gurl:
-                                    is_group_post = True
-                                    # Also fix the URL to include group context
-                                    if f"/groups/{slug_lower}" not in url.lower():
-                                        url = f"https://www.facebook.com/groups/{GROUP_SLUG}/posts/{pid_str}"
-                                    break
-                    else:
-                        is_group_post = True  # no slug configured, accept all
-
-                    if not is_group_post:
-                        print(f"   [API] ✗ REJECTED (not group): {user[:20]} | {url[:60]}")
-                        continue
-
-                    if pid_str not in captured and pid_str not in existing and url not in existing:
-                        print(f"   [API] ✓ {user[:25]} | {post_date} {post_time} | {msg[:40]}")
-                        row = {
-                            "post_url": url, "post_time": post_time, "post_date": post_date,
-                            "calendar_week": str(datetime.datetime.strptime(post_date, "%Y-%m-%d").isocalendar()[1]),
-                            "weekday": datetime.datetime.strptime(post_date, "%Y-%m-%d").strftime("%A"),
-                            "profile_name": user, "post_text": msg,
-                            "scrape_timestamp": ref_time.isoformat()
-                        }
-                        captured[pid_str] = row
-                        notify_api(pid_str, row, ref_time)
-
-        except Exception as e:
-            print(f"   [API Error] {e}")
-
-    # ── Browser ──────────────────────────────────────────────────────────────
-    with sync_playwright() as p:
-        # Validate auth
-        auth_path = STORAGE_STATE if os.path.exists(STORAGE_STATE) else None
-        if auth_path:
-            try:
-                with open(auth_path) as f:
-                    a = json.load(f)
-                if not a.get("cookies"):
-                    print("   [WARNING] Auth file has no cookies. Running unauthenticated.")
-                    auth_path = None
-                else:
-                    print(f"   Auth loaded: {len(a['cookies'])} cookies.")
-            except Exception as e:
-                print(f"   [WARNING] Auth file error: {e}. Running unauthenticated.")
-                auth_path = None
-        else:
-            print(f"   [WARNING] No auth file at {STORAGE_STATE}.")
-
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
-        )
-        ctx = browser.new_context(
-            storage_state=auth_path,
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/131.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 800}
-        )
-        page = ctx.new_page()
-        # NOTE: response handler is attached AFTER navigation to avoid capturing home feed data
-
-        print(f"Navigating to {GROUP_URL} ...")
-        try:
-            page.goto(GROUP_URL, wait_until="commit", timeout=120000)
-        except Exception as e:
-            print(f"❌ Navigation failed: {e}")
-            try:
-                page.screenshot(path="vps_error.png")
-            except: pass
-            browser_alive = False
-            browser.close()
-            return
-
-        current_url = page.url
-        print(f"   Landed on: {current_url[:80]}")
-        if "login" in current_url.lower() or "checkpoint" in current_url.lower():
-            print("❌ Redirected to login/checkpoint. Session expired!")
-            try:
-                page.screenshot(path="vps_error.png")
-            except: pass
-            browser_alive = False
-            browser.close()
-            return
-
-        # Modal bypass — same as scraper_playwright.py
-        BYPASS_TEXTS = ["Continuer en tant que", "Continue as", "Continuar como"]
-        for attempt in range(3):
-            found = False
-            for txt in BYPASS_TEXTS:
-                target = page.get_by_text(txt, exact=False).first
-                if target.count() > 0:
-                    print(f"   Modal: clicking '{txt}'")
-                    target.click(force=True, timeout=5000)
-                    time.sleep(10)
-                    found = True
-                    break
-            if found:
-                break
-            time.sleep(5)
-
-        # Verify we're on the group page, re-navigate if needed
-        current_url = page.url
-        if GROUP_SLUG and GROUP_SLUG.lower() not in current_url.lower():
-            print(f"   ⚠️ Not on group page ({current_url[:60]}). Re-navigating...")
-            try:
-                page.goto(GROUP_URL, wait_until="commit", timeout=60000)
-                time.sleep(5)
-            except Exception as e:
-                print(f"   ❌ Re-navigation failed: {e}")
-
-        # Wait for feed content to render
-        try:
-            page.wait_for_selector('[role="feed"]', timeout=45000)
-            print("   ✅ Feed container detected.")
-        except Exception:
-            print("   ⚠️ Feed not detected yet. Continuing anyway...")
-
-        time.sleep(15)  # Hydration buffer — let JS render the feed
-
-        # NOW attach the response handler — we're on the group page, so all
-        # subsequent GraphQL responses will be group-related
-        page.on("response", handle_response)
-        print("   ✅ Response handler attached (group page confirmed).")
-
-        try:
-            page.screenshot(path="vps_db_check.png")
-            print("   📸 Screenshot: vps_db_check.png")
-        except: pass
-
-        # ── DOM capture + Scroll loop ────────────────────────────────────────
-        dom_captured = {}  # dedup_key -> row dict
-
-        def scrape_dom():
-            """Extract posts from visible DOM using dual selectors."""
-            try:
-                dom_posts = page.evaluate("""(groupSlug) => {
-                    const posts = [];
-                    const seen = new Set();
-
-                    // ONLY use [role="feed"] children — never standalone articles
-                    const feed = document.querySelector('[role="feed"]');
-                    if (!feed) return posts;
-                    const containers = Array.from(feed.children);
-
-                    for (const item of containers) {
-                        try {
-                            // AUTHOR
-                            let user = '';
-                            const headingLink = item.querySelector('h2 a, h3 a, h4 a, strong a, [data-ad-rendering-role="profile_name"] a');
-                            if (headingLink) user = headingLink.textContent.trim();
-                            if (!user || user === 'Nouvelles publications' || user === 'Recent posts') continue;
-
-                            // TEXT: longest [dir="auto"] block
-                            let text = '';
-                            const allDirAuto = item.querySelectorAll('[dir="auto"]');
-                            let maxLen = 0;
-                            allDirAuto.forEach(el => {
-                                const t = el.textContent.trim();
-                                if (t.length > maxLen && t.length > 5) { maxLen = t.length; text = t; }
-                            });
-
-                            // PERMALINK: must contain the group slug
-                            let url = '';
-                            const links = item.querySelectorAll('a[href]');
-                            for (const link of links) {
-                                const href = link.getAttribute('href') || '';
-                                const full = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
-                                if (groupSlug && full.includes('/groups/' + groupSlug)) {
-                                    if (href.includes('/posts/') || href.includes('/permalink/') || href.includes('/p/')) {
-                                        url = full;
-                                        break;
-                                    }
-                                }
-                            }
-                            // HARD REQUIREMENT: must have a group URL — skip otherwise
-                            if (!url) continue;
-
-                            const key = user + '|' + (text || '').substring(0, 50);
-                            if (seen.has(key)) continue;
-                            seen.add(key);
-
-                            posts.push({ user, text: text || '[Media post - no text]', url });
-                        } catch(e) {}
-                    }
-                    return posts;
-                }""", GROUP_SLUG or "")
-
-                new_count = 0
-                for dp in dom_posts:
-                    # URL is guaranteed to be a group URL by JS filter
-                    post_url = dp.get('url', '')
-                    if not post_url:
-                        continue
-
-                    norm_text = re.sub(r'\s+', '', dp['text'].lower())
-                    dedup_key = f"{dp['user']}_{hashlib.md5(norm_text.encode()).hexdigest()}"
-                    if dedup_key in dom_captured:
-                        continue
-
+                post_date, post_time, _ = parse_facebook_date(creation_time, ref_time)
+                if not post_date:
                     post_date = ref_time.strftime('%Y-%m-%d')
+                if not post_time:
                     post_time = ref_time.strftime('%H:%M')
 
+                url = f"https://www.facebook.com/{post_id}"
+                meta_url = find_key_recursive(s, "url")
+                if meta_url and "facebook.com" in str(meta_url):
+                    url = str(meta_url)
+
+                is_group_post = False
+                if GROUP_SLUG:
+                    slug_lower = GROUP_SLUG.lower()
+                    if f"/groups/{slug_lower}" in url.lower():
+                        is_group_post = True
+                    for gkey in ("owning_profile", "target_group", "group"):
+                        gref = find_key_recursive(s, gkey)
+                        if gref and isinstance(gref, dict):
+                            gname = (gref.get("name") or "").lower()
+                            gurl = (gref.get("url") or "").lower()
+                            if slug_lower in gname or slug_lower in gurl:
+                                is_group_post = True
+                                if f"/groups/{slug_lower}" not in url.lower():
+                                    url = f"https://www.facebook.com/groups/{GROUP_SLUG}/posts/{pid_str}"
+                                break
+                else:
+                    is_group_post = True
+
+                if not is_group_post:
+                    continue
+
+                if pid_str not in existing and url not in existing:
                     row = {
-                        "post_url": post_url,
-                        "post_time": post_time, "post_date": post_date,
-                        "calendar_week": str(ref_time.isocalendar()[1]),
-                        "weekday": ref_time.strftime("%A"),
-                        "profile_name": dp['user'],
-                        "post_text": dp['text'],
-                        "scrape_timestamp": ref_time.isoformat(),
-                        "_dedup_key": dedup_key
+                        "post_url": url, "post_time": post_time, "post_date": post_date,
+                        "calendar_week": str(datetime.datetime.strptime(post_date, "%Y-%m-%d").isocalendar()[1]),
+                        "weekday": datetime.datetime.strptime(post_date, "%Y-%m-%d").strftime("%A"),
+                        "profile_name": user, "post_text": msg,
+                        "scrape_timestamp": ref_time.isoformat()
                     }
-                    dom_captured[dedup_key] = row
-                    notify_api(dedup_key, row, ref_time)
-                    new_count += 1
-                return new_count
+                    captured[pid_str] = row
+                    count += 1
+                    print(f"   [+] {user[:25]} | {post_date} {post_time} | {msg[:40]}")
+        return count
+
+    # ── Browser: get page HTML + intercept responses ─────────────────────────
+    print("Starting browser...")
+    try:
+        with sync_playwright() as p:
+            auth_path = STORAGE_STATE if os.path.exists(STORAGE_STATE) else None
+            if auth_path:
+                try:
+                    with open(auth_path) as f:
+                        a = json.load(f)
+                    if not a.get("cookies"):
+                        auth_path = None
+                    else:
+                        print(f"   Auth: {len(a['cookies'])} cookies.")
+                except:
+                    auth_path = None
+
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"]
+            )
+            ctx = browser.new_context(
+                storage_state=auth_path,
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800}
+            )
+            page = ctx.new_page()
+
+            # Collect ALL response bodies for later processing
+            response_bodies = []
+            def collect_response(response):
+                try:
+                    if response.status == 200:
+                        ct = response.headers.get("content-type", "")
+                        if "json" in ct or "javascript" in ct or "html" in ct or "graphql" in response.url.lower():
+                            body = response.text()
+                            if body and len(body) > 500:
+                                response_bodies.append(body)
+                except:
+                    pass
+            page.on("response", collect_response)
+
+            print(f"Navigating to {GROUP_URL} ...")
+            page.goto(GROUP_URL, wait_until="networkidle", timeout=120000)
+            print(f"   Landed: {page.url[:80]}")
+
+            if "login" in page.url.lower() or "checkpoint" in page.url.lower():
+                print("❌ Session expired!")
+                try: browser.close()
+                except: pass
+                conn.close()
+                return
+
+            # 1. Parse the page HTML for embedded data
+            print("   Extracting embedded data from HTML...")
+            try:
+                html = page.content()
+                print(f"   HTML size: {len(html)} bytes")
+                new = process_raw_data(html)
+                print(f"   From HTML: {new} posts")
             except Exception as e:
-                print(f"   [DOM Warning] {e}")
-                return 0
+                print(f"   HTML extraction error: {e}")
 
-        def enrich_dom_with_api():
-            """Enrich DOM posts with timestamps from API data."""
-            enriched = 0
-            for key, dom_row in dom_captured.items():
-                dom_norm = re.sub(r'\s+', '', dom_row['post_text'].lower())[:80]
-                for api_row in captured.values():
-                    api_norm = re.sub(r'\s+', '', api_row['post_text'].lower())[:80]
-                    if dom_norm == api_norm or (dom_row['profile_name'] == api_row['profile_name'] and len(dom_norm) > 10 and dom_norm[:40] == api_norm[:40]):
-                        dom_row['post_time'] = api_row['post_time']
-                        dom_row['post_date'] = api_row['post_date']
-                        dom_row['calendar_week'] = api_row['calendar_week']
-                        dom_row['weekday'] = api_row['weekday']
-                        if api_row['post_url'] and 'facebook.com' in api_row['post_url']:
-                            dom_row['post_url'] = api_row['post_url']
-                        enriched += 1
+            # 2. Parse collected response bodies
+            print(f"   Processing {len(response_bodies)} collected responses...")
+            for body in response_bodies:
+                process_raw_data(body)
+            print(f"   Total after responses: {len(captured)} posts")
+
+            # Save what we have so far (in case scroll phase gets killed)
+            if captured:
+                print("   Saving initial batch to DB...")
+                for pid, row in captured.items():
+                    url = row['post_url']
+                    if GROUP_SLUG and f"/groups/{GROUP_SLUG.lower()}" not in url.lower():
+                        continue
+                    try:
+                        p_date, p_time = row.get('post_date'), row.get('post_time')
+                        if p_date and p_time:
+                            fmt = '%Y-%m-%d %H:%M:%S' if len(p_time) > 5 else '%Y-%m-%d %H:%M'
+                            p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", fmt)
+                            age_min = (ref_time - p_dt).total_seconds() / 60
+                            if age_min > AGE_LIMIT_MINUTES:
+                                continue
+                    except:
+                        pass
+                    post_id = extract_post_id(url)
+                    if url in existing or (post_id and post_id in existing):
+                        continue
+                    try:
+                        upsert_post(conn, row)
+                        existing.add(url)
+                    except:
+                        pass
+                conn.commit()
+                print(f"   Initial save done.")
+
+            # 3. Scroll to trigger more content
+            print("   Scrolling for more...")
+
+            prev_bodies = len(response_bodies)
+            stall = 0
+            for i in range(MAX_SCROLLS):
+                prev_count = len(captured)
+                try:
+                    for _ in range(3):
+                        page.keyboard.press("PageDown")
+                        time.sleep(1.5)
+                    time.sleep(3)
+
+                    # Process new responses
+                    new_bodies = response_bodies[prev_bodies:]
+                    prev_bodies = len(response_bodies)
+                    for body in new_bodies:
+                        process_raw_data(body)
+                except Exception as e:
+                    print(f"   Scroll error: {e}")
+                    break
+
+                if len(captured) == prev_count:
+                    stall += 1
+                    if stall >= 3:
+                        print(f"   Feed exhausted. Total: {len(captured)}")
                         break
-            return enriched
+                else:
+                    stall = 0
 
-        initial = scrape_dom()
-        if initial > 0:
-            print(f"   Initial DOM: {initial} posts.")
+                if i % 3 == 0:
+                    print(f"   Scroll {i+1}/{MAX_SCROLLS} | Posts: {len(captured)}")
 
-        stall_count = 0
-        for i in range(MAX_SCROLLS):
-            prev_dom = len(dom_captured)
-            prev_api = len(captured)
+            print(f"   Browser done. Captured: {len(captured)}")
+            try: browser.close()
+            except: pass
 
-            for _ in range(3):
-                page.keyboard.press("PageDown")
-                time.sleep(1.5)
-            time.sleep(2)
+    except Exception as e:
+        print(f"   Browser error: {type(e).__name__}: {e}")
+        print(f"   Captured {len(captured)} before error.")
 
-            scrape_dom()
+    if not captured:
+        print("⚠️ No posts captured.")
+        conn.close()
+        return
 
-            if len(dom_captured) == prev_dom and len(captured) == prev_api:
-                stall_count += 1
-                time.sleep(3)
-                page.keyboard.press("PageUp")
-                time.sleep(1.5)
-                page.keyboard.press("PageDown")
-                time.sleep(1.5)
-                scrape_dom()
-                if stall_count >= 5:
-                    print(f"\n   Stop: Feed exhausted after {stall_count} stall batches.")
-                    break
-            else:
-                stall_count = 0
-
-            if i % 2 == 0:
-                print(f"   Scroll {i+1}/{MAX_SCROLLS} | DOM: {len(dom_captured)} | API: {len(captured)}")
-
-        enriched = enrich_dom_with_api()
-        print(f"   Enriched {enriched} DOM posts with API timestamps.")
-
-        browser_alive = False
-        browser.close()
-
-    # ── Merge DOM + API, then save to SQLite ────────────────────────────────
-    # Start with DOM posts, then add API-only posts
-    all_posts = dict(dom_captured)
-    api_only = 0
-    for pid, api_row in captured.items():
-        api_norm = re.sub(r'\s+', '', api_row['post_text'].lower())
-        api_key = f"{api_row['profile_name']}_{hashlib.md5(api_norm.encode()).hexdigest()}"
-        already_in = api_key in all_posts
-        if not already_in:
-            for dom_row in dom_captured.values():
-                dom_norm = re.sub(r'\s+', '', dom_row['post_text'].lower())[:80]
-                if api_norm[:80] == dom_norm:
-                    already_in = True
-                    break
-        if not already_in and len(api_row['post_text']) > 1:
-            all_posts[api_key] = api_row
-            api_only += 1
-    if api_only:
-        print(f"   Added {api_only} API-only posts.")
-
-    print(f"Total merged: {len(all_posts)} ({len(dom_captured)} DOM + {api_only} API-only)")
+    # ── Save to SQLite ───────────────────────────────────────────────────────
+    print(f"\nSaving {len(captured)} posts...")
     saved = 0
     skipped_age = 0
-    skipped_group = 0
-    for key, row in all_posts.items():
+    for pid, row in captured.items():
         url = row['post_url']
-
-        # ── STRICT group filter (final check) ──
-        if GROUP_SLUG and url:
-            if f"/groups/{GROUP_SLUG.lower()}" not in url.lower():
-                skipped_group += 1
-                continue
-
-        # ── Age filter: skip posts older than AGE_LIMIT_MINUTES ──
+        if GROUP_SLUG and f"/groups/{GROUP_SLUG.lower()}" not in url.lower():
+            continue
         try:
-            p_date = row.get('post_date')
-            p_time = row.get('post_time')
+            p_date, p_time = row.get('post_date'), row.get('post_time')
             if p_date and p_time:
                 fmt = '%Y-%m-%d %H:%M:%S' if len(p_time) > 5 else '%Y-%m-%d %H:%M'
                 p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", fmt)
@@ -833,13 +683,11 @@ def main():
                 if age_min > AGE_LIMIT_MINUTES:
                     skipped_age += 1
                     continue
-        except Exception:
-            pass  # if date can't be parsed, keep the post
-
-        pid = extract_post_id(url)
-        if url in existing or (pid and pid in existing):
+        except:
+            pass
+        post_id = extract_post_id(url)
+        if url in existing or (post_id and post_id in existing):
             continue
-
         try:
             upsert_post(conn, row)
             existing.add(url)
@@ -848,13 +696,10 @@ def main():
             print(f"   [DB Error] {e}")
 
     if skipped_age:
-        print(f"   Skipped {skipped_age} posts older than {AGE_LIMIT_MINUTES} minutes.")
-    if skipped_group:
-        print(f"   Skipped {skipped_group} posts not from target group.")
-
+        print(f"   Skipped {skipped_age} posts older than {AGE_LIMIT_MINUTES} min.")
     conn.commit()
     conn.close()
-    print(f"✅ Done. Saved {saved} new posts to SQLite.")
+    print(f"✅ Done. Saved {saved} new posts.")
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
 GROUP_URL = os.getenv("GROUP_URL", "https://www.facebook.com/groups/covsousse?sorting_setting=CHRONOLOGICAL")
 STORAGE_STATE = os.getenv("STORAGE_STATE", os.path.join(SCRIPT_DIR, "facebook_auth.json"))
 TIMEZONE_OFFSET = int(os.getenv("TIMEZONE_OFFSET", "1"))
-MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "20"))
+MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "35"))
 AGE_LIMIT_MINUTES = int(os.getenv("AGE_LIMIT_MINUTES", "59"))
 
 # Extract group identifier for filtering (e.g., "covsousse" or numeric ID)
@@ -503,10 +503,6 @@ def main():
                 msg = find_actual_message(s) or "[Media post - no text]"
                 user = find_actual_user(s)
 
-                # Skip empty duplicate stories (no real content)
-                if user == "Unknown User" and msg == "[Media post - no text]":
-                    continue
-
                 creation_time = None
                 for tf in TIME_FIELDS:
                     val = find_numeric_time(s, tf)
@@ -588,9 +584,9 @@ def main():
                 try:
                     if response.status == 200:
                         ct = response.headers.get("content-type", "")
-                        if "json" in ct or "javascript" in ct or "html" in ct or "graphql" in response.url.lower():
+                        if "json" in ct or "javascript" in ct or "html" in ct or "text" in ct or "graphql" in response.url.lower() or "ajax" in response.url.lower():
                             body = response.text()
-                            if body and len(body) > 500:
+                            if body and len(body) > 100:
                                 response_bodies.append(body)
                 except:
                     pass
@@ -625,12 +621,20 @@ def main():
                 except:
                     pass
 
-            # 1. Parse the page HTML for embedded data
+            # 1. Parse the page HTML for embedded data + script tags
             print("   Extracting embedded data from HTML...")
             try:
                 html = page.content()
                 print(f"   HTML size: {len(html)} bytes")
                 new = process_raw_data(html)
+                # Also extract JSON from script tags
+                import re as _re
+                script_blocks = _re.findall(r'<script[^>]*>({.*?"data".*?})</script>', html, _re.DOTALL)
+                for sb in script_blocks:
+                    try:
+                        new += process_raw_data(sb)
+                    except:
+                        pass
                 print(f"   From HTML: {new} posts")
             except Exception as e:
                 print(f"   HTML extraction error: {e}")
@@ -658,6 +662,8 @@ def main():
                                 continue
                     except:
                         pass
+                    if row.get('profile_name') == 'Unknown User' and row.get('post_text') == '[Media post - no text]':
+                        continue
                     post_id = extract_post_id(url)
                     if url in existing or (post_id and post_id in existing):
                         continue
@@ -693,14 +699,54 @@ def main():
 
                 if len(captured) == prev_count:
                     stall += 1
-                    if stall >= 3:
+                    if stall >= 5:
                         print(f"   Feed exhausted. Total: {len(captured)}")
                         break
+                    # Try harder during stall
+                    try:
+                        time.sleep(2)
+                        page.keyboard.press("End")
+                        time.sleep(2)
+                        page.keyboard.press("PageDown")
+                        time.sleep(2)
+                        # Re-process any new responses
+                        new_bodies = response_bodies[prev_bodies:]
+                        prev_bodies = len(response_bodies)
+                        for body in new_bodies:
+                            process_raw_data(body)
+                    except:
+                        pass
                 else:
                     stall = 0
 
                 if i % 3 == 0:
                     print(f"   Scroll {i+1}/{MAX_SCROLLS} | Posts: {len(captured)}")
+                # Incremental save every 5 scrolls
+                if i > 0 and i % 5 == 0:
+                    for pid, row in captured.items():
+                        url = row['post_url']
+                        if GROUP_SLUG and f"/groups/{GROUP_SLUG.lower()}" not in url.lower():
+                            continue
+                        if row.get('profile_name') == 'Unknown User' and row.get('post_text') == '[Media post - no text]':
+                            continue
+                        post_id_check = extract_post_id(url)
+                        if url in existing or (post_id_check and post_id_check in existing):
+                            continue
+                        try:
+                            upsert_post(conn, row)
+                            existing.add(url)
+                        except:
+                            pass
+                    conn.commit()
+
+            # Final HTML parse after scrolling
+            try:
+                final_html = page.content()
+                final_new = process_raw_data(final_html)
+                if final_new:
+                    print(f"   Final HTML pass: +{final_new} posts")
+            except:
+                pass
 
             print(f"   Browser done. Captured: {len(captured)}")
             try: browser.close()
@@ -754,6 +800,10 @@ def main():
                     continue
         except:
             pass
+        # Skip empty posts when saving to DB
+        if row.get('profile_name') == 'Unknown User' and row.get('post_text') == '[Media post - no text]':
+            continue
+
         post_id = extract_post_id(url)
         if url in existing or (post_id and post_id in existing):
             continue

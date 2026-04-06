@@ -245,15 +245,6 @@
       </div>
     </div>
 
-    <!-- Scraper Status Banner -->
-    <div class="scraper-banner" id="scraper-banner">
-      <div class="scraper-spinner" id="scraper-spinner"></div>
-      <div>
-        <div class="banner-text" id="banner-text">Scraper is running...</div>
-        <div class="banner-detail" id="banner-detail"></div>
-      </div>
-    </div>
-
     <!-- Filters -->
     <div class="filters glass-panel">
       <div class="filter-group">
@@ -323,6 +314,28 @@
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scraper Toast -->
+  <div class="scrape-toast" id="scrape-toast">
+    <div class="scrape-toast-header" onclick="toggleToastBody()">
+      <div class="st-dot"></div>
+      <div class="st-title" id="st-title">Scraping...</div>
+      <div class="st-time" id="st-time"></div>
+      <div class="st-chevron">&#9660;</div>
+    </div>
+    <div class="st-body">
+      <div class="st-inner">
+        <div class="st-phase"><div class="st-mini-spin"></div><span id="st-phase">Initializing...</span></div>
+        <div class="st-grid">
+          <div class="st-row"><span class="st-lbl">Captured</span><span class="st-val" id="st-captured">0</span></div>
+          <div class="st-row"><span class="st-lbl">Saved</span><span class="st-val" id="st-saved">&mdash;</span></div>
+          <div class="st-row"><span class="st-lbl">Scroll</span><span class="st-val" id="st-scroll">&mdash;</span></div>
+          <div class="st-row"><span class="st-lbl">Elapsed</span><span class="st-val" id="st-elapsed">0s</span></div>
+        </div>
+        <div class="st-bar"><div class="st-bar-fill" id="st-bar"></div></div>
       </div>
     </div>
   </div>
@@ -587,129 +600,98 @@
 
     // ─── Scrape trigger ───────────────────────────────────────────────────
     let scrapePolling = null;
+    let toastOpen = true;
+
+    function toggleToastBody() {
+      toastOpen = !toastOpen;
+      document.getElementById('scrape-toast').classList.toggle('expanded', toastOpen);
+    }
+
+    function stUpdate(title, phase, captured, saved, scroll, maxScroll, elapsed, pct) {
+      document.getElementById('st-title').textContent = title;
+      document.getElementById('st-phase').textContent = phase;
+      document.getElementById('st-captured').textContent = captured != null ? captured : '0';
+      document.getElementById('st-saved').textContent = saved != null ? saved : '\u2014';
+      document.getElementById('st-scroll').textContent = scroll ? (scroll + '/' + maxScroll) : '\u2014';
+      document.getElementById('st-elapsed').textContent = elapsed + 's';
+      document.getElementById('st-time').textContent = elapsed + 's';
+      if (pct != null) document.getElementById('st-bar').style.width = Math.min(pct, 100) + '%';
+    }
 
     async function triggerScrape() {
       const btn = document.getElementById('sync-btn');
       const icon = document.getElementById('sync-icon');
-      const banner = document.getElementById('scraper-banner');
-      const bannerText = document.getElementById('banner-text');
-      const bannerDetail = document.getElementById('banner-detail');
-      const spinner = document.getElementById('scraper-spinner');
-
+      const toast = document.getElementById('scrape-toast');
       btn.disabled = true;
       icon.classList.add('spinning');
-      banner.className = 'scraper-banner active';
-      spinner.style.display = 'block';
-      bannerText.textContent = 'Scraper started...';
-      bannerDetail.textContent = 'This may take 2-4 minutes.';
+      toast.className = 'scrape-toast visible expanded';
+      toastOpen = true;
+      stUpdate('Starting...', 'Launching browser...', 0, null, null, null, 0, 2);
 
-      let initialJobId = 0;
-      try {
-        const jr = await fetch('/api/jobs?limit=1');
-        const jobs = await jr.json();
-        if (jobs.length) initialJobId = jobs[0].id;
-      } catch(e) {}
+      let initJobId = 0;
+      try { const r = await fetch('/api/jobs?limit=1'); const j = await r.json(); if (j.length) initJobId = j[0].id; } catch(e) {}
 
-      try {
-        await fetch('/api/scrape', { method: 'POST' });
-      } catch (e) {
-        banner.className = 'scraper-banner active error';
-        bannerText.textContent = 'Failed to start scraper.';
-        spinner.style.display = 'none';
-        btn.disabled = false;
-        icon.classList.remove('spinning');
-        setTimeout(() => banner.className = 'scraper-banner', 5000);
+      try { await fetch('/api/scrape', { method: 'POST' }); } catch(e) {
+        toast.className = 'scrape-toast visible expanded error';
+        stUpdate('Failed', 'Could not start scraper', 0, 0, null, null, 0, 0);
+        btn.disabled = false; icon.classList.remove('spinning');
+        setTimeout(() => toast.classList.remove('visible'), 6000);
         return;
       }
 
       let elapsed = 0;
-
       scrapePolling = setInterval(async () => {
         elapsed += 3;
-
-        // Poll real scraper progress
         try {
           const sr = await fetch('/api/scrape/status');
-          const status = await sr.json();
-
-          if (status.phase === 'idle' && elapsed > 10) {
-            // Scraper finished and cleaned up progress file — check job
-          } else if (status.phase === 'done') {
+          const s = await sr.json();
+          if (s.phase === 'done') {
             clearInterval(scrapePolling); scrapePolling = null;
-            spinner.style.display = 'none';
-            banner.className = 'scraper-banner active done';
-            bannerText.textContent = status.detail || 'Scrape complete';
-            bannerDetail.textContent = 'Captured: ' + (status.captured || 0) + ' | Saved: ' + (status.saved || 0);
+            toast.className = 'scrape-toast visible expanded done';
+            stUpdate('Complete', s.detail || 'Done', s.captured, s.saved, null, null, elapsed, 100);
             btn.disabled = false; icon.classList.remove('spinning');
-            refreshStats(); loadPosts();
-            if (jobsVisible) loadJobs();
-            setTimeout(() => banner.className = 'scraper-banner', 12000);
+            refreshStats(); loadPosts(); if (jobsVisible) loadJobs();
+            setTimeout(() => toast.classList.remove('visible'), 15000);
             return;
-          } else if (status.phase !== 'idle') {
-            // Show real progress
-            const phaseLabels = {
-              starting: 'Initializing browser...',
-              navigating: 'Opening group page...',
-              hydrating: 'Waiting for page to render...',
-              extracting: 'Parsing page data...',
-              scrolling: 'Scrolling feed...',
-              saving: 'Saving to database...',
-            };
-            bannerText.textContent = phaseLabels[status.phase] || status.detail || status.phase;
-            let detail = '';
-            if (status.captured) detail += status.captured + ' posts found';
-            if (status.scroll) detail += ' | Scroll ' + status.scroll + '/' + status.max_scroll;
-            if (detail) detail += ' | ' + elapsed + 's';
-            else detail = elapsed + 's elapsed';
-            bannerDetail.textContent = detail;
-
+          }
+          if (s.phase !== 'idle') {
+            const labels = {starting:'Launching browser...',navigating:'Opening group page...',hydrating:'Rendering page...',extracting:'Parsing data...',scrolling:'Scrolling feed...',saving:'Saving to database...'};
+            const pct = s.scroll && s.max_scroll ? Math.round((s.scroll/s.max_scroll)*100) : (s.phase==='saving'?95:Math.min(elapsed/3,90));
+            stUpdate('Scraping...', labels[s.phase]||s.phase, s.captured, s.saved, s.scroll, s.max_scroll, elapsed, pct);
             if (elapsed % 15 === 0) { refreshStats(); loadPosts(); }
             return;
           }
         } catch(e) {}
 
-        // Fallback: check jobs for completion
+        // Fallback: job check
         try {
-          const jr = await fetch('/api/jobs?limit=1');
-          const jobs = await jr.json();
-          if (jobs.length && jobs[0].id > initialJobId && jobs[0].status !== 'running') {
+          const r = await fetch('/api/jobs?limit=1'); const jobs = await r.json();
+          if (jobs.length && jobs[0].id > initJobId && jobs[0].status !== 'running') {
             clearInterval(scrapePolling); scrapePolling = null;
-            const job = jobs[0];
-            spinner.style.display = 'none';
-            if (job.status === 'success') {
-              banner.className = 'scraper-banner active done';
-              bannerText.textContent = 'Scrape complete: ' + job.saved + ' new posts';
-              bannerDetail.textContent = job.captured + ' captured, ' + job.skipped_age + ' skipped by age | ' + job.duration_sec + 's';
-            } else if (job.status === 'empty') {
-              banner.className = 'scraper-banner active';
-              bannerText.textContent = 'No new posts found.';
-              bannerDetail.textContent = 'Duration: ' + job.duration_sec + 's';
-            } else {
-              banner.className = 'scraper-banner active error';
-              bannerText.textContent = 'Scrape failed: ' + (job.error || 'unknown');
-            }
-            btn.disabled = false; icon.classList.remove('spinning');
-            refreshStats(); loadPosts();
-            if (jobsVisible) loadJobs();
-            setTimeout(() => banner.className = 'scraper-banner', 12000);
+            const j = jobs[0];
+            if (j.status === 'success') { toast.className='scrape-toast visible expanded done'; stUpdate('Complete',j.saved+' new posts',j.captured,j.saved,null,null,Math.round(j.duration_sec),100); }
+            else if (j.status === 'empty') { toast.className='scrape-toast visible expanded'; stUpdate('No new posts','Feed was empty',0,0,null,null,Math.round(j.duration_sec),100); }
+            else { toast.className='scrape-toast visible expanded error'; stUpdate('Failed',j.error||'Unknown',0,0,null,null,Math.round(j.duration_sec),0); }
+            btn.disabled=false; icon.classList.remove('spinning');
+            refreshStats(); loadPosts(); if(jobsVisible) loadJobs();
+            setTimeout(()=>toast.classList.remove('visible'),15000);
             return;
           }
-        } catch(e) {}
+        } catch(e){}
 
-        bannerDetail.textContent = elapsed + 's elapsed...';
+        document.getElementById('st-elapsed').textContent = elapsed+'s';
+        document.getElementById('st-time').textContent = elapsed+'s';
 
         if (elapsed > 360) {
-          clearInterval(scrapePolling); scrapePolling = null;
-          spinner.style.display = 'none';
-          banner.className = 'scraper-banner active error';
-          bannerText.textContent = 'Scraper timed out.';
-          btn.disabled = false; icon.classList.remove('spinning');
+          clearInterval(scrapePolling); scrapePolling=null;
+          toast.className='scrape-toast visible expanded error';
+          stUpdate('Timed out','No response from scraper',0,0,null,null,elapsed,0);
+          btn.disabled=false; icon.classList.remove('spinning');
           refreshStats(); loadPosts();
-          setTimeout(() => banner.className = 'scraper-banner', 10000);
+          setTimeout(()=>toast.classList.remove('visible'),10000);
         }
       }, 3000);
     }
-
 
     // ─── Clear posts ──────────────────────────────────────────────────────
     async function clearPosts() {

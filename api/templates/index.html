@@ -207,8 +207,22 @@
         </select>
       </div>
       <div class="filter-group">
-        <label for="city-filter">From City</label>
+        <label for="city-filter">From</label>
         <input id="city-filter" type="text" placeholder="e.g. Sousse" oninput="debounceSearch()" />
+      </div>
+      <div class="filter-group">
+        <label for="to-city-filter">To</label>
+        <input id="to-city-filter" type="text" placeholder="e.g. Tunis" oninput="applyClientFilters()" />
+      </div>
+      <div class="filter-group">
+        <label for="sort-select">Sort</label>
+        <select id="sort-select" onchange="applyClientFilters()">
+          <option value="newest">Newest First</option>
+          <option value="oldest">Oldest First</option>
+          <option value="price_asc">Price ↑</option>
+          <option value="price_desc">Price ↓</option>
+          <option value="name_az">Name A–Z</option>
+        </select>
       </div>
       <div class="filter-count">
         <span id="count-label">Showing — posts</span>
@@ -295,7 +309,7 @@
       try {
         const res = await fetch(`/api/posts?${params}`);
         currentPosts = await res.json();
-        renderPosts(currentPosts);
+        applyClientFilters();
       } catch (e) {
         grid.innerHTML = `<div class="error-state">❌ Failed to load posts.</div>`;
       }

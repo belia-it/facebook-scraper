@@ -524,8 +524,15 @@ def main():
                     except:
                         pass
 
-                msg = find_actual_message(s) or "[Media post - no text]"
+                msg = find_actual_message(s)
                 user = find_actual_user(s)
+
+                # Skip lightweight story references (no text AND no named author)
+                # These are partial objects Facebook includes alongside full stories
+                if not msg and user == "Unknown User":
+                    continue
+                if not msg:
+                    msg = "[Media post - no text]"
 
                 creation_time = None
                 for tf in TIME_FIELDS:

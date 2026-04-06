@@ -449,6 +449,7 @@
                 <th>Saved</th>
                 <th>Skipped (age)</th>
                 <th>Error</th>
+                <th></th>
               </tr>
             </thead>
             <tbody id="jobs-tbody">
@@ -678,6 +679,7 @@
                 <th class="sortable" onclick="sortTable('route')">Route <span class="sort-arrow" id="sort-route"></span></th>
                 <th>Post Text</th>
                 <th class="sortable" onclick="sortTable('price')">Price <span class="sort-arrow" id="sort-price"></span></th>
+                <th>Captured</th>
                 <th>Link</th>
                 <th></th>
               </tr>
@@ -715,6 +717,7 @@
           <td style="white-space:nowrap">${escapeHtml(route)}</td>
           <td><div class="tbl-text" title="${escapeHtml(post.post_text || '')}">${escapeHtml(post.post_text || '[No text]')}</div></td>
           <td style="white-space:nowrap">${post.price ? `💰 ${escapeHtml(post.price)}` : '—'}</td>
+          <td class="tbl-date">${post.captured_at ? new Date(post.captured_at).toLocaleTimeString() : '\u2014'}</td>
           <td><a href="${post.post_url}" target="_blank" rel="noopener" class="tbl-link">View ↗</a></td>
           <td><button class="btn-eye" onclick="showPostDetail(currentPosts.indexOf(currentPosts.find(p=>p.post_url==='${post.post_url.replace(/'/g, "\'")}')))" title="Details">${eyeIcon}</button></td>
         </tr>
@@ -1019,6 +1022,8 @@
         ['URL', post.post_url],
         ['Week', `W${post.calendar_week || '?'} — ${post.weekday || ''}`],
         ['Scraped', post.scrape_timestamp],
+        ['Captured At', post.captured_at],
+        ['Job ID', post.job_id ? '#' + post.job_id : null],
       ];
       let meta = null;
       try { if (post.metadata) meta = JSON.parse(post.metadata); } catch(e) {}
@@ -1065,7 +1070,7 @@
           const started = j.started_at ? new Date(j.started_at).toLocaleString() : '—';
           const dur = j.duration_sec ? j.duration_sec + 's' : '—';
           const statusCls = j.status || 'running';
-          return `<tr>
+          return `<tr style="cursor:pointer" onclick="filterByJob(${j.id})">
             <td>${j.id}</td>
             <td class="tbl-date">${started}</td>
             <td><span class="job-status ${statusCls}">${j.status || 'running'}</span></td>
@@ -1073,11 +1078,27 @@
             <td>${j.captured ?? '—'}</td>
             <td>${j.saved ?? '—'}</td>
             <td>${j.skipped_age ?? '—'}</td>
-            <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:rgba(255,255,255,0.4)">${escapeHtml(j.error || '—')}</td>
+            <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:rgba(255,255,255,0.4)">${escapeHtml(j.error || '—')}</td>
           </tr>`;
         }).join('');
       } catch(e) {
         document.getElementById('jobs-tbody').innerHTML = '<tr><td colspan="8" style="color:#f87171">Failed to load jobs</td></tr>';
+      }
+    }
+
+    // ─── Filter by Job ────────────────────────────────────────────────
+    async function filterByJob(jobId) {
+      switchTab('posts');
+      const grid = document.getElementById('posts-grid');
+      grid.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Loading job #' + jobId + ' posts...</p></div>';
+      try {
+        const res = await fetch('/api/posts?job_id=' + jobId + '&limit=500');
+        currentPosts = await res.json();
+        applyClientFilters();
+        document.getElementById('count-label').textContent = 'Showing ' + currentPosts.length + ' posts from Job #' + jobId;
+        showToast('Filtered to Job #' + jobId + ' (' + currentPosts.length + ' posts)');
+      } catch(e) {
+        grid.innerHTML = '<div class="error-state">Failed to load posts for job.</div>';
       }
     }
 

@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS posts (
     post_text_french        TEXT,
     scrape_timestamp        TEXT,
     synced_at               TEXT DEFAULT (datetime('now')),
-    metadata                TEXT
+    metadata                TEXT,
+    job_id                  INTEGER,
+    captured_at             TEXT
 );
 """
 
@@ -105,7 +107,7 @@ def upsert_posts(rows: list[dict]):
     conn.close()
     return inserted
 
-def query_posts(search: str = "", filter_type: str = "ALL", limit: int = 200):
+def query_posts(search: str = "", filter_type: str = "ALL", limit: int = 200, job_id: int = None):
     conn = get_connection()
     base_sql = """
         SELECT * FROM posts
@@ -128,6 +130,10 @@ def query_posts(search: str = "", filter_type: str = "ALL", limit: int = 200):
         base_sql += " AND LOWER(offer_or_demand) LIKE '%offer%'"
     elif filter_type == "DEMAND":
         base_sql += " AND LOWER(offer_or_demand) LIKE '%demand%'"
+
+    if job_id is not None:
+        base_sql += " AND job_id = ?"
+        params.append(job_id)
 
     base_sql += " ORDER BY post_date DESC, post_time DESC LIMIT ?"
     params.append(limit)

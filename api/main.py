@@ -82,9 +82,10 @@ async def api_posts(
     filter_type: str = Query("ALL", description="ALL | OFFER | DEMAND"),
     from_city: str = Query("", description="Filter by departure city"),
     limit: int = Query(200, le=500),
+    job_id: int = Query(None, description="Filter by job ID"),
 ):
     combined_search = " ".join(filter(None, [search, from_city]))
-    posts = query_posts(search=combined_search, filter_type=filter_type, limit=limit)
+    posts = query_posts(search=combined_search, filter_type=filter_type, limit=limit, job_id=job_id)
     return JSONResponse(content=posts)
 
 

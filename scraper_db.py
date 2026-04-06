@@ -76,7 +76,9 @@ def init_db():
             post_text_french          TEXT,
             scrape_timestamp          TEXT,
             synced_at                 TEXT DEFAULT (datetime('now')),
-            metadata                  TEXT
+            metadata                  TEXT,
+            job_id                    INTEGER,
+            captured_at               TEXT
         )
     """)
     conn.execute("""
@@ -117,10 +119,10 @@ def upsert_post(conn, data: dict):
     conn.execute("""
         INSERT INTO posts (
             post_url, post_time, post_date, calendar_week, weekday,
-            profile_name, post_text, scrape_timestamp, metadata
+            profile_name, post_text, scrape_timestamp, metadata, job_id, captured_at
         ) VALUES (
             :post_url, :post_time, :post_date, :calendar_week, :weekday,
-            :profile_name, :post_text, :scrape_timestamp, :metadata
+            :profile_name, :post_text, :scrape_timestamp, :metadata, :job_id, :captured_at
         )
         ON CONFLICT(post_url) DO UPDATE SET
             profile_name     = excluded.profile_name,
@@ -128,6 +130,8 @@ def upsert_post(conn, data: dict):
             post_time        = excluded.post_time,
             post_date        = excluded.post_date,
             metadata         = excluded.metadata,
+            job_id           = excluded.job_id,
+            captured_at      = excluded.captured_at,
             synced_at        = datetime('now')
     """, data)
 
@@ -586,7 +590,9 @@ def main():
                         "weekday": datetime.datetime.strptime(post_date, "%Y-%m-%d").strftime("%A"),
                         "profile_name": user, "post_text": msg,
                         "scrape_timestamp": ref_time.isoformat(),
-                        "metadata": meta_json
+                        "metadata": meta_json,
+                        "job_id": job_id,
+                        "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
                     }
                     captured[pid_str] = row
                     count += 1

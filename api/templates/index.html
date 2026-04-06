@@ -131,6 +131,51 @@
     .job-status.running { background: rgba(59,130,246,0.2); color: #60a5fa; }
     .job-status.error   { background: rgba(239,68,68,0.2); color: #f87171; }
     .job-status.empty   { background: rgba(251,191,36,0.2); color: #fbbf24; }
+
+    /* ── Post Detail Modal ─────────────────────────────────────────────── */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(6px); z-index: 1000;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; pointer-events: none; transition: opacity 0.2s;
+    }
+    .modal-overlay.open { opacity: 1; pointer-events: auto; }
+    .modal-box {
+      background: #1a1a2e; border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 16px; width: 90%; max-width: 640px; max-height: 80vh;
+      overflow-y: auto; padding: 28px; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+    .modal-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 14px;
+    }
+    .modal-header h3 { font-size: 1rem; font-weight: 600; color: #fff; margin: 0; }
+    .modal-close {
+      background: rgba(255,255,255,0.08); border: none; color: rgba(255,255,255,0.6);
+      width: 32px; height: 32px; border-radius: 8px; cursor: pointer;
+      font-size: 1.1rem; display: flex; align-items: center; justify-content: center;
+    }
+    .modal-close:hover { background: rgba(255,255,255,0.15); color: #fff; }
+    .modal-field { margin-bottom: 12px; }
+    .modal-field .mf-label {
+      font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.05em; color: rgba(139,92,246,0.8); margin-bottom: 3px;
+    }
+    .modal-field .mf-value {
+      font-size: 0.85rem; color: rgba(255,255,255,0.85);
+      word-break: break-word; line-height: 1.5;
+    }
+    .modal-field .mf-value.mono {
+      font-family: 'SF Mono', monospace; font-size: 0.75rem;
+      background: rgba(0,0,0,0.3); border-radius: 8px; padding: 10px;
+      color: rgba(255,255,255,0.7); white-space: pre-wrap; max-height: 200px; overflow-y: auto;
+    }
+    .btn-eye {
+      background: none; border: none; cursor: pointer; color: rgba(255,255,255,0.4);
+      padding: 4px; border-radius: 4px; transition: color 0.15s;
+    }
+    .btn-eye:hover { color: rgba(139,92,246,0.9); }
+    .btn-eye svg { width: 18px; height: 18px; vertical-align: middle; }
   </style>
 </head>
 <body>
@@ -265,6 +310,17 @@
     </div>
   </div>
 
+  <!-- Post Detail Modal -->
+  <div class="modal-overlay" id="post-modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="modal-title">Post Details</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
   <!-- Sync Toast -->
   <div id="toast" class="toast"></div>
 
@@ -348,6 +404,7 @@
     return 0;
    });
 
+   window._displayedPosts = posts;
    renderPosts(posts);
   }
 
@@ -376,10 +433,10 @@
     function renderCards(posts) {
       const grid = document.getElementById('posts-grid');
       grid.className = 'posts-grid';
-      grid.innerHTML = posts.map(post => createPostHTML(post)).join('');
+      grid.innerHTML = posts.map((post, idx) => createPostHTML(post, idx)).join('');
     }
 
-    function createPostHTML(post) {
+    function createPostHTML(post, idx) {
       const isOffer = (post.offer_or_demand || '').toLowerCase().includes('offer');
       const isDemand = (post.offer_or_demand || '').toLowerCase().includes('demand');
       const initials = (post.profile_name || '?').substring(0, 2).toUpperCase();
@@ -425,6 +482,7 @@
               ${depTime ? `<span class="chip">${depTime}</span>` : ''}
             </div>
             <a href="${post.post_url}" target="_blank" rel="noopener" class="btn-ghost">View ↗</a>
+            <button class="btn-eye" onclick="showPostDetail(${idx})" title="View details">${eyeIcon}</button>
           </div>
         </div>
       `;
@@ -446,17 +504,18 @@
                 <th>Post Text</th>
                 <th>Price</th>
                 <th>Link</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
-              ${posts.map(post => createTableRow(post)).join('')}
+              ${posts.map((post, idx) => createTableRow(post, idx)).join('')}
             </tbody>
           </table>
         </div>
       `;
     }
 
-    function createTableRow(post) {
+    function createTableRow(post, idx) {
       const isOffer = (post.offer_or_demand || '').toLowerCase().includes('offer');
       const isDemand = (post.offer_or_demand || '').toLowerCase().includes('demand');
       const initials = (post.profile_name || '?').substring(0, 2).toUpperCase();
@@ -482,6 +541,7 @@
           <td><div class="tbl-text" title="${escapeHtml(post.post_text || '')}">${escapeHtml(post.post_text || '[No text]')}</div></td>
           <td style="white-space:nowrap">${post.price ? `💰 ${escapeHtml(post.price)}` : '—'}</td>
           <td><a href="${post.post_url}" target="_blank" rel="noopener" class="tbl-link">View ↗</a></td>
+          <td><button class="btn-eye" onclick="showPostDetail(currentPosts.indexOf(currentPosts.find(p=>p.post_url==='${post.post_url.replace(/'/g, "\'")}')))" title="Details">${eyeIcon}</button></td>
         </tr>
       `;
     }
@@ -640,6 +700,58 @@
 
       refreshStats();
     }
+
+    // ─── Post Detail Modal ──────────────────────────────────────────────
+    const eyeIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+
+    function showPostDetail(idx) {
+      const post = (window._displayedPosts || currentPosts)[idx];
+      if (!post) return;
+      const fields = [
+        ['Profile', post.profile_name],
+        ['Date', `${post.post_date || ''} ${post.post_time || ''}`],
+        ['Post Text', post.post_text],
+        ['English', post.post_text_english],
+        ['French', post.post_text_french],
+        ['Type', post.offer_or_demand],
+        ['From', [post.from_city, post.from_area].filter(Boolean).join(', ')],
+        ['To', [post.to_city, post.to_area].filter(Boolean).join(', ')],
+        ['Departure', post.preferred_departure_time],
+        ['Price', post.price],
+        ['Passengers', post.nr_passengers],
+        ['Gender', post.gender],
+        ['URL', post.post_url],
+        ['Week', `W${post.calendar_week || '?'} — ${post.weekday || ''}`],
+        ['Scraped', post.scrape_timestamp],
+      ];
+      let meta = null;
+      try { if (post.metadata) meta = JSON.parse(post.metadata); } catch(e) {}
+
+      let html = fields.map(([label, val]) => {
+        if (!val) return '';
+        const isUrl = label === 'URL';
+        return `<div class="modal-field">
+          <div class="mf-label">${label}</div>
+          <div class="mf-value">${isUrl ? `<a href="${escapeHtml(val)}" target="_blank" style="color:#a78bfa">${escapeHtml(val)}</a>` : escapeHtml(val)}</div>
+        </div>`;
+      }).join('');
+
+      if (meta) {
+        html += `<div class="modal-field">
+          <div class="mf-label">Raw Metadata</div>
+          <div class="mf-value mono">${escapeHtml(JSON.stringify(meta, null, 2))}</div>
+        </div>`;
+      }
+
+      document.getElementById('modal-title').textContent = post.profile_name || 'Post Details';
+      document.getElementById('modal-body').innerHTML = html;
+      document.getElementById('post-modal').classList.add('open');
+    }
+
+    function closeModal() {
+      document.getElementById('post-modal').classList.remove('open');
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
     // ─── Job Logs ──────────────────────────────────────────────────────────
     let jobsVisible = false;

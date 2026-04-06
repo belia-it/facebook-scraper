@@ -472,6 +472,10 @@ def main():
                 msg = find_actual_message(s) or "[Media post - no text]"
                 user = find_actual_user(s)
 
+                # Skip empty duplicate stories (no real content)
+                if user == "Unknown User" and msg == "[Media post - no text]":
+                    continue
+
                 creation_time = None
                 for tf in TIME_FIELDS:
                     val = find_numeric_time(s, tf)
@@ -490,26 +494,22 @@ def main():
                 if meta_url and "facebook.com" in str(meta_url):
                     url = str(meta_url)
 
-                is_group_post = False
+                # STRICT: URL must contain /groups/covsousse — no exceptions
                 if GROUP_SLUG:
                     slug_lower = GROUP_SLUG.lower()
-                    if f"/groups/{slug_lower}" in url.lower():
-                        is_group_post = True
-                    for gkey in ("owning_profile", "target_group", "group"):
-                        gref = find_key_recursive(s, gkey)
-                        if gref and isinstance(gref, dict):
-                            gname = (gref.get("name") or "").lower()
-                            gurl = (gref.get("url") or "").lower()
-                            if slug_lower in gname or slug_lower in gurl:
-                                is_group_post = True
-                                if f"/groups/{slug_lower}" not in url.lower():
+                    if f"/groups/{slug_lower}" not in url.lower():
+                        # Try to find group URL in metadata
+                        found_group_url = False
+                        for gkey in ("owning_profile", "target_group", "group"):
+                            gref = find_key_recursive(s, gkey)
+                            if gref and isinstance(gref, dict):
+                                gurl = (gref.get("url") or "").lower()
+                                if slug_lower in gurl:
                                     url = f"https://www.facebook.com/groups/{GROUP_SLUG}/posts/{pid_str}"
-                                break
-                else:
-                    is_group_post = True
-
-                if not is_group_post:
-                    continue
+                                    found_group_url = True
+                                    break
+                        if not found_group_url:
+                            continue
 
                 if pid_str not in existing and url not in existing:
                     row = {

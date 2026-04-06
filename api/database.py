@@ -122,9 +122,12 @@ def query_posts(search: str = "", filter_type: str = "ALL", limit: int = 200):
 def clear_posts():
     conn = get_connection()
     conn.execute("DELETE FROM posts")
-    conn.execute("VACUUM")
     conn.commit()
     conn.close()
+    # VACUUM must run outside a transaction
+    conn2 = get_connection()
+    conn2.execute("VACUUM")
+    conn2.close()
 
 def get_stats():
     conn = get_connection()

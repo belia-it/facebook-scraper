@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(SCRIPT_DIR, "api", "posts.db")
+PROGRESS_FILE = os.path.join(SCRIPT_DIR, "api", "_scrape_progress.json")
 
 # Import job logging from API database module
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "api"))
@@ -431,6 +432,23 @@ def extract_post_id(url):
 NOTIFIED_POSTS = set()
 
 
+def report_progress(phase, detail="", captured=0, saved=0, scroll=None, max_scroll=None):
+    try:
+        data = {
+            "phase": phase,
+            "detail": detail,
+            "captured": captured,
+            "saved": saved,
+            "scroll": scroll,
+            "max_scroll": max_scroll,
+            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+        with open(PROGRESS_FILE, 'w') as f:
+            json.dump(data, f)
+    except:
+        pass
+
+
 def notify_api(post_id, data, ref_time):
     """Push new post to the FastAPI WebSocket broadcast endpoint."""
     if not post_id or post_id in NOTIFIED_POSTS:
@@ -576,6 +594,7 @@ def main():
         return count
 
     # ── Browser: get page HTML + intercept responses ─────────────────────────
+    report_progress("starting", "Initializing browser...")
     print("Starting browser...")
     try:
         with sync_playwright() as p:
@@ -616,6 +635,7 @@ def main():
                     pass
             page.on("response", collect_response)
 
+            report_progress("navigating", "Opening group page...")
             print(f"Navigating to {GROUP_URL} ...")
             page.goto(GROUP_URL, wait_until="commit", timeout=60000)
             print(f"   Landed: {page.url[:80]}")
@@ -628,6 +648,7 @@ def main():
                 return
 
             # Wait for page to hydrate
+            report_progress("hydrating", "Waiting for page to render...")
             try:
                 page.wait_for_load_state("load", timeout=20000)
                 print("   Page load event fired.")
@@ -646,6 +667,7 @@ def main():
                     pass
 
             # 1. Parse the page HTML for embedded data + script tags
+            report_progress("extracting", "Parsing page data...")
             print("   Extracting embedded data from HTML...")
             try:
                 html = page.content()
@@ -664,6 +686,7 @@ def main():
                 print(f"   HTML extraction error: {e}")
 
             # 2. Parse collected response bodies
+            report_progress("extracting", f"Processing {len(response_bodies)} responses...", captured=len(captured))
             print(f"   Processing {len(response_bodies)} collected responses...")
             for body in response_bodies:
                 process_raw_data(body)
@@ -744,6 +767,7 @@ def main():
                     stall = 0
 
                 if i % 3 == 0:
+                    report_progress("scrolling", f"Scroll {i+1}/{MAX_SCROLLS}", captured=len(captured), scroll=i+1, max_scroll=MAX_SCROLLS)
                     print(f"   Scroll {i+1}/{MAX_SCROLLS} | Posts: {len(captured)}")
                 # Incremental save every 5 scrolls
                 if i > 0 and i % 5 == 0:
@@ -791,6 +815,7 @@ def main():
             except: pass
 
     if not captured:
+        report_progress("done", "No posts captured", captured=0, saved=0)
         print("⚠️ No posts captured.")
         if job_id and update_job:
             try:
@@ -842,6 +867,7 @@ def main():
         print(f"   Skipped {skipped_age} posts older than {AGE_LIMIT_MINUTES} min.")
     conn.commit()
     conn.close()
+    report_progress("done", f"Saved {saved} new posts", captured=len(captured), saved=saved)
     print(f"✅ Done. Saved {saved} new posts.")
 
     # Log job result
@@ -866,3 +892,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+    try:
+        os.remove(PROGRESS_FILE)
+    except:
+        pass

@@ -126,6 +126,19 @@ async def api_clear_posts():
     return {"status": "ok", "message": "All posts cleared."}
 
 
+@app.get("/api/scrape/status")
+async def scrape_status():
+    progress_file = os.path.join(ROOT_DIR, "api", "_scrape_progress.json")
+    if os.path.exists(progress_file):
+        try:
+            import json
+            with open(progress_file) as f:
+                return json.load(f)
+        except:
+            pass
+    return {"phase": "idle"}
+
+
 @app.get("/api/jobs")
 async def api_jobs(limit: int = Query(20, le=100)):
     """Return recent scrape job logs."""

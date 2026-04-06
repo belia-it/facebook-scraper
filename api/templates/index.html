@@ -623,17 +623,52 @@
       }
 
       let elapsed = 0;
-      const phases = [[0,'Navigating to group page...'],[15,'Waiting for feed to render...'],[25,'Extracting posts from page...'],[35,'Scrolling and capturing posts...'],[120,'Still scrolling...'],[200,'Saving to database...']];
 
       scrapePolling = setInterval(async () => {
-        elapsed += 5;
-        let phase = phases[0][1];
-        for (const [sec, text] of phases) { if (elapsed >= sec) phase = text; }
-        bannerText.textContent = phase;
-        bannerDetail.textContent = 'Running for ' + elapsed + 's...';
+        elapsed += 3;
 
-        if (elapsed % 15 === 0) { refreshStats(); loadPosts(); }
+        // Poll real scraper progress
+        try {
+          const sr = await fetch('/api/scrape/status');
+          const status = await sr.json();
 
+          if (status.phase === 'idle' && elapsed > 10) {
+            // Scraper finished and cleaned up progress file — check job
+          } else if (status.phase === 'done') {
+            clearInterval(scrapePolling); scrapePolling = null;
+            spinner.style.display = 'none';
+            banner.className = 'scraper-banner active done';
+            bannerText.textContent = status.detail || 'Scrape complete';
+            bannerDetail.textContent = 'Captured: ' + (status.captured || 0) + ' | Saved: ' + (status.saved || 0);
+            btn.disabled = false; icon.classList.remove('spinning');
+            refreshStats(); loadPosts();
+            if (jobsVisible) loadJobs();
+            setTimeout(() => banner.className = 'scraper-banner', 12000);
+            return;
+          } else if (status.phase !== 'idle') {
+            // Show real progress
+            const phaseLabels = {
+              starting: 'Initializing browser...',
+              navigating: 'Opening group page...',
+              hydrating: 'Waiting for page to render...',
+              extracting: 'Parsing page data...',
+              scrolling: 'Scrolling feed...',
+              saving: 'Saving to database...',
+            };
+            bannerText.textContent = phaseLabels[status.phase] || status.detail || status.phase;
+            let detail = '';
+            if (status.captured) detail += status.captured + ' posts found';
+            if (status.scroll) detail += ' | Scroll ' + status.scroll + '/' + status.max_scroll;
+            if (detail) detail += ' | ' + elapsed + 's';
+            else detail = elapsed + 's elapsed';
+            bannerDetail.textContent = detail;
+
+            if (elapsed % 15 === 0) { refreshStats(); loadPosts(); }
+            return;
+          }
+        } catch(e) {}
+
+        // Fallback: check jobs for completion
         try {
           const jr = await fetch('/api/jobs?limit=1');
           const jobs = await jr.json();
@@ -643,15 +678,15 @@
             spinner.style.display = 'none';
             if (job.status === 'success') {
               banner.className = 'scraper-banner active done';
-              bannerText.textContent = 'Scrape complete: ' + job.saved + ' new posts (' + job.captured + ' captured, ' + job.skipped_age + ' skipped by age)';
-              bannerDetail.textContent = 'Duration: ' + job.duration_sec + 's';
+              bannerText.textContent = 'Scrape complete: ' + job.saved + ' new posts';
+              bannerDetail.textContent = job.captured + ' captured, ' + job.skipped_age + ' skipped by age | ' + job.duration_sec + 's';
             } else if (job.status === 'empty') {
               banner.className = 'scraper-banner active';
-              bannerText.textContent = 'Scrape finished: no new posts found.';
+              bannerText.textContent = 'No new posts found.';
               bannerDetail.textContent = 'Duration: ' + job.duration_sec + 's';
             } else {
               banner.className = 'scraper-banner active error';
-              bannerText.textContent = 'Scrape failed: ' + (job.error || 'unknown error');
+              bannerText.textContent = 'Scrape failed: ' + (job.error || 'unknown');
             }
             btn.disabled = false; icon.classList.remove('spinning');
             refreshStats(); loadPosts();
@@ -660,6 +695,8 @@
             return;
           }
         } catch(e) {}
+
+        bannerDetail.textContent = elapsed + 's elapsed...';
 
         if (elapsed > 360) {
           clearInterval(scrapePolling); scrapePolling = null;
@@ -670,8 +707,9 @@
           refreshStats(); loadPosts();
           setTimeout(() => banner.className = 'scraper-banner', 10000);
         }
-      }, 5000);
+      }, 3000);
     }
+
 
     // ─── Clear posts ──────────────────────────────────────────────────────
     async function clearPosts() {

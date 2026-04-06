@@ -715,8 +715,6 @@ def main():
                                 continue
                     except:
                         pass
-                    if row.get('profile_name') == 'Unknown User' and row.get('post_text') == '[Media post - no text]':
-                        continue
                     post_id = extract_post_id(url)
                     if url in existing or (post_id and post_id in existing):
                         continue
@@ -780,8 +778,6 @@ def main():
                     for pid, row in captured.items():
                         url = row['post_url']
                         if GROUP_SLUG and f"/groups/{GROUP_SLUG.lower()}" not in url.lower():
-                            continue
-                        if row.get('profile_name') == 'Unknown User' and row.get('post_text') == '[Media post - no text]':
                             continue
                         post_id_check = extract_post_id(url)
                         if url in existing or (post_id_check and post_id_check in existing):
@@ -856,8 +852,6 @@ def main():
         except:
             pass
         # Skip empty posts when saving to DB
-        if row.get('profile_name') == 'Unknown User' and row.get('post_text') == '[Media post - no text]':
-            continue
 
         post_id = extract_post_id(url)
         if url in existing or (post_id and post_id in existing):

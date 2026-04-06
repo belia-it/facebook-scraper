@@ -135,6 +135,17 @@ def query_posts(search: str = "", filter_type: str = "ALL", limit: int = 200, jo
         base_sql += " AND job_id = ?"
         params.append(job_id)
 
+    # Hide "Unknown User" duplicates that have a named counterpart at the same time
+    base_sql += """ AND NOT (
+        profile_name = 'Unknown User' AND post_text = '[Media post - no text]'
+        AND EXISTS (
+            SELECT 1 FROM posts p2
+            WHERE p2.post_date = posts.post_date
+            AND p2.post_time = posts.post_time
+            AND p2.profile_name != 'Unknown User'
+        )
+    )"""
+
     base_sql += " ORDER BY post_date DESC, post_time DESC LIMIT ?"
     params.append(limit)
 

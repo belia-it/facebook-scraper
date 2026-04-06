@@ -566,7 +566,7 @@ def main():
             page.on("response", collect_response)
 
             print(f"Navigating to {GROUP_URL} ...")
-            page.goto(GROUP_URL, wait_until="networkidle", timeout=120000)
+            page.goto(GROUP_URL, wait_until="commit", timeout=60000)
             print(f"   Landed: {page.url[:80]}")
 
             if "login" in page.url.lower() or "checkpoint" in page.url.lower():
@@ -575,6 +575,24 @@ def main():
                 except: pass
                 conn.close()
                 return
+
+            # Wait for page to hydrate
+            try:
+                page.wait_for_load_state("load", timeout=20000)
+                print("   Page load event fired.")
+            except:
+                print("   Page load timed out.")
+            
+            # Active hydration — force browser to process JS
+            for i in range(5):
+                time.sleep(3)
+                try:
+                    has_feed = page.evaluate('() => !!document.querySelector("[role=feed]")')
+                    if has_feed:
+                        print(f"   ✅ Feed detected ({(i+1)*3}s).")
+                        break
+                except:
+                    pass
 
             # 1. Parse the page HTML for embedded data
             print("   Extracting embedded data from HTML...")

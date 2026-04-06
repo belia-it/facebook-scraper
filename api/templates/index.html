@@ -10,6 +10,37 @@
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/styles.css" />
   <style>
+    /* ── Navigation Tabs ────────────────────────────────────────────────── */
+    .nav-pills {
+      display: flex; gap: 4px; margin-bottom: 20px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px; padding: 4px;
+      width: fit-content;
+    }
+    .nav-pill {
+      display: flex; align-items: center; gap: 7px;
+      padding: 8px 18px; border: none; border-radius: 9px;
+      background: transparent; color: rgba(255,255,255,0.45);
+      font-family: inherit; font-size: 0.84rem; font-weight: 500;
+      cursor: pointer; transition: all 0.2s ease; white-space: nowrap;
+    }
+    .nav-pill:hover { color: rgba(255,255,255,0.8); background: rgba(255,255,255,0.06); }
+    .nav-pill.active {
+      background: rgba(139,92,246,0.15); color: #fff;
+      box-shadow: 0 2px 8px rgba(139,92,246,0.15);
+    }
+    .nav-pill .pill-icon { font-size: 1rem; }
+    .nav-pill .pill-badge {
+      background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.5);
+      padding: 1px 7px; border-radius: 10px; font-size: 0.7rem; font-weight: 600;
+    }
+    .nav-pill.active .pill-badge { background: rgba(139,92,246,0.25); color: rgba(255,255,255,0.8); }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; animation: fadeIn 0.25s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
     /* ── View toggle ─────────────────────────────────────────────────────── */
     .view-toggle {
       display: flex;
@@ -341,6 +372,19 @@
       </div>
     </div>
 
+    <!-- Navigation Tabs -->
+    <nav class="nav-pills" id="main-nav">
+      <button class="nav-pill active" onclick="switchTab('posts')" id="pill-posts">
+        <span class="pill-icon">&#x1F4CB;</span> Posts <span class="pill-badge" id="pill-posts-count">0</span>
+      </button>
+      <button class="nav-pill" onclick="switchTab('jobs')" id="pill-jobs">
+        <span class="pill-icon">&#x23F1;</span> Jobs <span class="pill-badge" id="pill-jobs-count">0</span>
+      </button>
+    </nav>
+
+    <!-- Tab: Posts -->
+    <div class="tab-panel active" id="tab-posts">
+
     <!-- Filters -->
     <div class="filters glass-panel">
       <div class="filter-group">
@@ -385,9 +429,11 @@
         <p>Loading posts...</p>
       </div>
     </div>
-  </div>
+    </div>
+    <!-- /Tab: Posts -->
 
-    <!-- Job Logs -->
+    <!-- Tab: Jobs -->
+    <div class="tab-panel" id="tab-jobs">
     <div class="jobs-section">
       <h2>📋 Scrape Jobs <button class="jobs-toggle" onclick="toggleJobs()">Show/Hide</button></h2>
       <div id="jobs-container" style="display:none">
@@ -412,6 +458,9 @@
         </div>
       </div>
     </div>
+    </div>
+    <!-- /Tab: Jobs -->
+
   </div>
 
   <!-- Scraper Toast -->
@@ -1001,12 +1050,7 @@
     document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
     // ─── Job Logs ──────────────────────────────────────────────────────────
-    let jobsVisible = false;
-    function toggleJobs() {
-      jobsVisible = !jobsVisible;
-      document.getElementById('jobs-container').style.display = jobsVisible ? 'block' : 'none';
-      if (jobsVisible) loadJobs();
-    }
+    let jobsVisible = true;
 
     async function loadJobs() {
       try {
@@ -1036,6 +1080,35 @@
         document.getElementById('jobs-tbody').innerHTML = '<tr><td colspan="8" style="color:#f87171">Failed to load jobs</td></tr>';
       }
     }
+
+    // ─── Tab Navigation ────────────────────────────────────────────────
+    let activeTab = 'posts';
+    function switchTab(tab) {
+      activeTab = tab;
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.nav-pill').forEach(p => p.classList.remove('active'));
+      document.getElementById('tab-' + tab).classList.add('active');
+      document.getElementById('pill-' + tab).classList.add('active');
+      if (tab === 'jobs') loadJobs();
+    }
+
+    function updatePillBadges() {
+      const postCount = document.getElementById('stat-total').textContent;
+      document.getElementById('pill-posts-count').textContent = postCount === '—' ? '0' : postCount;
+    }
+
+    // Update badges when stats refresh
+    const _origRefreshStats = refreshStats;
+    refreshStats = async function() {
+      await _origRefreshStats();
+      updatePillBadges();
+      // Update jobs badge
+      try {
+        const r = await fetch('/api/jobs?limit=100');
+        const jobs = await r.json();
+        document.getElementById('pill-jobs-count').textContent = jobs.length;
+      } catch(e) {}
+    };
 
     // ─── Init ─────────────────────────────────────────────────────────────
     refreshStats();

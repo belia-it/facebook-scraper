@@ -563,6 +563,19 @@ def main():
                             continue
 
                 if pid_str not in existing and url not in existing:
+                    # Dedup: skip "Unknown User" if a named post at same timestamp already captured
+                    if user == "Unknown User" and msg == "[Media post - no text]":
+                        post_date_val, post_time_val, _ = parse_facebook_date(creation_time, ref_time)
+                        ts_key = f"{post_date_val}_{post_time_val}"
+                        # Check if a named post at this exact timestamp already exists
+                        has_named = any(
+                            r.get('profile_name') != 'Unknown User'
+                            and f"{r.get('post_date')}_{r.get('post_time')}" == ts_key
+                            for r in captured.values()
+                        )
+                        if has_named:
+                            continue
+
                     # Build metadata JSON from story object (truncate large fields)
                     try:
                         meta = {}

@@ -245,6 +245,15 @@
       </div>
     </div>
 
+    <!-- Scraper Status Banner -->
+    <div class="scraper-banner" id="scraper-banner">
+      <div class="scraper-spinner" id="scraper-spinner"></div>
+      <div>
+        <div class="banner-text" id="banner-text">Scraper is running...</div>
+        <div class="banner-detail" id="banner-detail"></div>
+      </div>
+    </div>
+
     <!-- Filters -->
     <div class="filters glass-panel">
       <div class="filter-group">
@@ -577,25 +586,91 @@
     }
 
     // ─── Scrape trigger ───────────────────────────────────────────────────
+    let scrapePolling = null;
+
     async function triggerScrape() {
       const btn = document.getElementById('sync-btn');
       const icon = document.getElementById('sync-icon');
+      const banner = document.getElementById('scraper-banner');
+      const bannerText = document.getElementById('banner-text');
+      const bannerDetail = document.getElementById('banner-detail');
+      const spinner = document.getElementById('scraper-spinner');
+
       btn.disabled = true;
       icon.classList.add('spinning');
+      banner.className = 'scraper-banner active';
+      spinner.style.display = 'block';
+      bannerText.textContent = 'Scraper started...';
+      bannerDetail.textContent = 'This may take 2-4 minutes.';
 
-      showToast('⏳ Scraper started in background...');
+      let initialJobId = 0;
       try {
-        const res = await fetch('/api/scrape', { method: 'POST' });
-        const data = await res.json();
-        showToast(`✅ ${data.message} Refresh in a minute.`);
+        const jr = await fetch('/api/jobs?limit=1');
+        const jobs = await jr.json();
+        if (jobs.length) initialJobId = jobs[0].id;
+      } catch(e) {}
+
+      try {
+        await fetch('/api/scrape', { method: 'POST' });
       } catch (e) {
-        showToast('❌ Failed to start scraper. Check server logs.');
-      } finally {
-        setTimeout(() => {
-          btn.disabled = false;
-          icon.classList.remove('spinning');
-        }, 5000);
+        banner.className = 'scraper-banner active error';
+        bannerText.textContent = 'Failed to start scraper.';
+        spinner.style.display = 'none';
+        btn.disabled = false;
+        icon.classList.remove('spinning');
+        setTimeout(() => banner.className = 'scraper-banner', 5000);
+        return;
       }
+
+      let elapsed = 0;
+      const phases = [[0,'Navigating to group page...'],[15,'Waiting for feed to render...'],[25,'Extracting posts from page...'],[35,'Scrolling and capturing posts...'],[120,'Still scrolling...'],[200,'Saving to database...']];
+
+      scrapePolling = setInterval(async () => {
+        elapsed += 5;
+        let phase = phases[0][1];
+        for (const [sec, text] of phases) { if (elapsed >= sec) phase = text; }
+        bannerText.textContent = phase;
+        bannerDetail.textContent = 'Running for ' + elapsed + 's...';
+
+        if (elapsed % 15 === 0) { refreshStats(); loadPosts(); }
+
+        try {
+          const jr = await fetch('/api/jobs?limit=1');
+          const jobs = await jr.json();
+          if (jobs.length && jobs[0].id > initialJobId && jobs[0].status !== 'running') {
+            clearInterval(scrapePolling); scrapePolling = null;
+            const job = jobs[0];
+            spinner.style.display = 'none';
+            if (job.status === 'success') {
+              banner.className = 'scraper-banner active done';
+              bannerText.textContent = 'Scrape complete: ' + job.saved + ' new posts (' + job.captured + ' captured, ' + job.skipped_age + ' skipped by age)';
+              bannerDetail.textContent = 'Duration: ' + job.duration_sec + 's';
+            } else if (job.status === 'empty') {
+              banner.className = 'scraper-banner active';
+              bannerText.textContent = 'Scrape finished: no new posts found.';
+              bannerDetail.textContent = 'Duration: ' + job.duration_sec + 's';
+            } else {
+              banner.className = 'scraper-banner active error';
+              bannerText.textContent = 'Scrape failed: ' + (job.error || 'unknown error');
+            }
+            btn.disabled = false; icon.classList.remove('spinning');
+            refreshStats(); loadPosts();
+            if (jobsVisible) loadJobs();
+            setTimeout(() => banner.className = 'scraper-banner', 12000);
+            return;
+          }
+        } catch(e) {}
+
+        if (elapsed > 360) {
+          clearInterval(scrapePolling); scrapePolling = null;
+          spinner.style.display = 'none';
+          banner.className = 'scraper-banner active error';
+          bannerText.textContent = 'Scraper timed out.';
+          btn.disabled = false; icon.classList.remove('spinning');
+          refreshStats(); loadPosts();
+          setTimeout(() => banner.className = 'scraper-banner', 10000);
+        }
+      }, 5000);
     }
 
     // ─── Clear posts ──────────────────────────────────────────────────────

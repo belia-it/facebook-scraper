@@ -349,7 +349,7 @@ def parse_facebook_date(date_str, ref_time=None):
         ref_time = datetime.datetime.utcnow() + datetime.timedelta(hours=TIMEZONE_OFFSET) + datetime.timedelta(hours=0)  # local time
 
     if not date_str:
-        return ref_time.strftime('%Y-%m-%d'), ref_time.strftime('%H:%M'), ""
+        return ref_time.strftime('%Y-%m-%d'), ref_time.strftime('%H:%M:%S'), ""
 
     try:
         if isinstance(date_str, (int, float)) or (
@@ -357,7 +357,7 @@ def parse_facebook_date(date_str, ref_time=None):
             ts = int(date_str)
             dt_utc = datetime.datetime.utcfromtimestamp(ts)
             target = dt_utc + datetime.timedelta(hours=TIMEZONE_OFFSET)
-            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M'), f"API_{ts}"
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M:%S'), f"API_{ts}"
     except Exception:
         pass
 
@@ -375,21 +375,21 @@ def parse_facebook_date(date_str, ref_time=None):
 
     try:
         if ds in ('just now', 'now') or "l'instant" in ds:
-            return ref_time.strftime('%Y-%m-%d'), ref_time.strftime('%H:%M'), date_str
+            return ref_time.strftime('%Y-%m-%d'), ref_time.strftime('%H:%M:%S'), date_str
 
         exact_fr = re.search(
             r'(\d{1,2})\s+(' + all_month_names + r')\s+(\d{4})\s+[àa]\s+(\d{1,2}):(\d{2})', ds)
         if exact_fr:
             day, m_name, year, h, m = exact_fr.groups()
             target = datetime.datetime(int(year), months[m_name], int(day), int(h), int(m))
-            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M'), date_str
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M:%S'), date_str
 
         exact_en = re.search(
             r'(' + all_month_names + r')\s+(\d{1,2}),?\s+(\d{4})\s+at\s+(\d{1,2}):(\d{2})', ds)
         if exact_en:
             m_name, day, year, h, m = exact_en.groups()
             target = datetime.datetime(int(year), months[m_name], int(day), int(h), int(m))
-            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M'), date_str
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M:%S'), date_str
 
         rel = re.search(
             r'(\d+)\s*(minutes?|mins?|m|hours?|heures?|h|jours?|j|days?|d|seconds?|s)\b', ds)
@@ -406,7 +406,7 @@ def parse_facebook_date(date_str, ref_time=None):
                 target = ref_time - datetime.timedelta(seconds=val)
             else:
                 target = ref_time
-            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M'), date_str
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M:%S'), date_str
 
         if 'hier' in ds or 'yesterday' in ds:
             time_match = re.search(r'(\d{1,2})[:h](\d{2})', ds)
@@ -416,7 +416,7 @@ def parse_facebook_date(date_str, ref_time=None):
                     hour=int(h), minute=int(m), second=0)
             else:
                 target = ref_time - datetime.timedelta(days=1)
-            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M'), date_str
+            return target.strftime('%Y-%m-%d'), target.strftime('%H:%M:%S'), date_str
 
     except Exception as e:
         print(f"   [Warning] Date parsing failed for '{date_str}': {e}")
@@ -495,7 +495,7 @@ def main():
     existing = get_existing_ids(conn)
     ref_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)
     ref_time = ref_time.replace(tzinfo=None)
-    print(f"   ref_time (UTC+{TIMEZONE_OFFSET}): {ref_time.strftime('%Y-%m-%d %H:%M')}")
+    print(f"   ref_time (UTC+{TIMEZONE_OFFSET}): {ref_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     captured = {}
 
@@ -534,7 +534,7 @@ def main():
                 if not post_date:
                     post_date = ref_time.strftime('%Y-%m-%d')
                 if not post_time:
-                    post_time = ref_time.strftime('%H:%M')
+                    post_time = ref_time.strftime('%H:%M:%S')
 
                 url = f"https://www.facebook.com/{post_id}"
                 meta_url = find_key_recursive(s, "url")

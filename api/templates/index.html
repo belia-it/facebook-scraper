@@ -453,7 +453,7 @@
               </tr>
             </thead>
             <tbody id="jobs-tbody">
-              <tr><td colspan="8" style="text-align:center;color:rgba(255,255,255,0.3)">Loading...</td></tr>
+              <tr><td colspan="9" style="text-align:center;color:rgba(255,255,255,0.3)">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -1063,7 +1063,7 @@
         const jobs = await res.json();
         const tbody = document.getElementById('jobs-tbody');
         if (!jobs.length) {
-          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:rgba(255,255,255,0.3)">No jobs yet</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:rgba(255,255,255,0.3)">No jobs yet</td></tr>';
           return;
         }
         tbody.innerHTML = jobs.map(j => {
@@ -1082,7 +1082,7 @@
           </tr>`;
         }).join('');
       } catch(e) {
-        document.getElementById('jobs-tbody').innerHTML = '<tr><td colspan="8" style="color:#f87171">Failed to load jobs</td></tr>';
+        document.getElementById('jobs-tbody').innerHTML = '<tr><td colspan="9" style="color:#f87171">Failed to load jobs</td></tr>';
       }
     }
 

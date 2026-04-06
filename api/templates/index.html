@@ -110,6 +110,11 @@
     }
     .tbl-link:hover { color: #a78bfa; text-decoration: underline; }
     .tbl-date { white-space: nowrap; color: rgba(255,255,255,0.5); font-size: 0.8rem; }
+    .sortable { cursor: pointer; user-select: none; }
+    .sortable:hover { color: rgba(255,255,255,0.85); }
+    .sort-arrow { font-size: 0.65rem; opacity: 0.5; }
+    .sort-arrow.asc::after { content: ' ▲'; }
+    .sort-arrow.desc::after { content: ' ▼'; }
 
     /* ── Job Logs ──────────────────────────────────────────────────────── */
     .jobs-section { margin-top: 32px; }
@@ -208,6 +213,9 @@
             Table
           </button>
         </div>
+        <button class="btn-ghost" onclick="loadPosts();refreshStats();showToast('Refreshed')" title="Refresh data">
+          ⟳ Refresh
+        </button>
         <button id="sync-btn" class="btn-primary" onclick="triggerScrape()">
           <span id="sync-icon">⟳</span> Scrape Now
         </button>
@@ -497,12 +505,12 @@
           <table class="posts-table" id="data-table">
             <thead>
               <tr>
-                <th>User</th>
-                <th>Date & Time</th>
+                <th class="sortable" onclick="sortTable('name')">User <span class="sort-arrow" id="sort-name"></span></th>
+                <th class="sortable" onclick="sortTable('date')">Date & Time <span class="sort-arrow" id="sort-date"></span></th>
                 <th>Type</th>
-                <th>Route</th>
+                <th class="sortable" onclick="sortTable('route')">Route <span class="sort-arrow" id="sort-route"></span></th>
                 <th>Post Text</th>
-                <th>Price</th>
+                <th class="sortable" onclick="sortTable('price')">Price <span class="sort-arrow" id="sort-price"></span></th>
                 <th>Link</th>
                 <th></th>
               </tr>
@@ -699,6 +707,54 @@
       countLabel.textContent = `Showing ${currentCount + 1} posts`;
 
       refreshStats();
+    }
+
+    // ─── Table column sorting ──────────────────────────────────────────
+    let currentSort = { col: null, dir: 'asc' };
+
+    function sortTable(col) {
+      // Toggle direction
+      if (currentSort.col === col) {
+        currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        currentSort.col = col;
+        currentSort.dir = 'asc';
+      }
+
+      // Update arrows
+      document.querySelectorAll('.sort-arrow').forEach(el => el.className = 'sort-arrow');
+      const arrow = document.getElementById('sort-' + col);
+      if (arrow) arrow.className = 'sort-arrow ' + currentSort.dir;
+
+      // Sort displayed posts
+      const posts = window._displayedPosts || [...currentPosts];
+      const dir = currentSort.dir === 'asc' ? 1 : -1;
+
+      posts.sort((a, b) => {
+        let va, vb;
+        switch(col) {
+          case 'name':
+            va = (a.profile_name || '').toLowerCase();
+            vb = (b.profile_name || '').toLowerCase();
+            return va < vb ? -dir : va > vb ? dir : 0;
+          case 'date':
+            va = (a.post_date || '') + ' ' + (a.post_time || '');
+            vb = (b.post_date || '') + ' ' + (b.post_time || '');
+            return va < vb ? -dir : va > vb ? dir : 0;
+          case 'route':
+            va = ((a.from_city || '') + (a.to_city || '')).toLowerCase();
+            vb = ((b.from_city || '') + (b.to_city || '')).toLowerCase();
+            return va < vb ? -dir : va > vb ? dir : 0;
+          case 'price':
+            va = parseFloat(a.price) || 0;
+            vb = parseFloat(b.price) || 0;
+            return (va - vb) * dir;
+          default: return 0;
+        }
+      });
+
+      window._displayedPosts = posts;
+      renderPosts(posts);
     }
 
     // ─── Post Detail Modal ──────────────────────────────────────────────

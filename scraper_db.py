@@ -10,6 +10,7 @@ Key fixes:
   - Deduplication: checks both post_url and extracted post_id
 """
 
+import sys
 import time
 import datetime
 import os
@@ -23,6 +24,14 @@ from dotenv import load_dotenv
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(SCRIPT_DIR, "api", "posts.db")
+
+# Import job logging from API database module
+sys.path.insert(0, os.path.join(SCRIPT_DIR, "api"))
+try:
+    from database import create_job, update_job
+except ImportError:
+    create_job = None
+    update_job = None
 
 load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
 GROUP_URL = os.getenv("GROUP_URL", "https://www.facebook.com/groups/covsousse?sorting_setting=CHRONOLOGICAL")
@@ -66,6 +75,20 @@ def init_db():
             post_text_french          TEXT,
             scrape_timestamp          TEXT,
             synced_at                 TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scrape_jobs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at      TEXT NOT NULL,
+            finished_at     TEXT,
+            status          TEXT DEFAULT 'running',
+            captured        INTEGER DEFAULT 0,
+            saved           INTEGER DEFAULT 0,
+            skipped_age     INTEGER DEFAULT 0,
+            skipped_group   INTEGER DEFAULT 0,
+            duration_sec    REAL,
+            error           TEXT
         )
     """)
     conn.commit()
@@ -441,6 +464,14 @@ def notify_api(post_id, data, ref_time):
 def main():
     print("=== scraper_db.py starting ===")
     conn = init_db()
+    job_id = None
+    job_start = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if create_job:
+        try:
+            job_id = create_job(job_start)
+            print(f"   Job #{job_id} started.")
+        except Exception as e:
+            print(f"   Job logging error: {e}")
     existing = get_existing_ids(conn)
     ref_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)
     ref_time = ref_time.replace(tzinfo=None)
@@ -678,9 +709,29 @@ def main():
     except Exception as e:
         print(f"   Browser error: {type(e).__name__}: {e}")
         print(f"   Captured {len(captured)} before error.")
+        if job_id and update_job and not captured:
+            try:
+                finished = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                started_dt = datetime.datetime.fromisoformat(job_start)
+                finished_dt = datetime.datetime.fromisoformat(finished)
+                duration = (finished_dt - started_dt).total_seconds()
+                update_job(job_id,
+                    finished_at=finished, status="error",
+                    error=str(e)[:200], duration_sec=round(duration, 1))
+            except: pass
 
     if not captured:
         print("⚠️ No posts captured.")
+        if job_id and update_job:
+            try:
+                finished = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                started_dt = datetime.datetime.fromisoformat(job_start)
+                finished_dt = datetime.datetime.fromisoformat(finished)
+                duration = (finished_dt - started_dt).total_seconds()
+                update_job(job_id,
+                    finished_at=finished, status="empty",
+                    captured=0, saved=0, duration_sec=round(duration, 1))
+            except: pass
         conn.close()
         return
 
@@ -718,6 +769,25 @@ def main():
     conn.commit()
     conn.close()
     print(f"✅ Done. Saved {saved} new posts.")
+
+    # Log job result
+    if job_id and update_job:
+        try:
+            import time as _t
+            finished = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            started_dt = datetime.datetime.fromisoformat(job_start)
+            finished_dt = datetime.datetime.fromisoformat(finished)
+            duration = (finished_dt - started_dt).total_seconds()
+            update_job(job_id,
+                finished_at=finished,
+                status="success",
+                captured=len(captured),
+                saved=saved,
+                skipped_age=skipped_age,
+                duration_sec=round(duration, 1)
+            )
+        except Exception as e:
+            print(f"   Job log error: {e}")
 
 
 if __name__ == "__main__":

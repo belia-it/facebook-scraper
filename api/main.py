@@ -13,7 +13,7 @@ API_DIR  = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(API_DIR)
 sys.path.append(API_DIR)
 
-from database import init_db, query_posts, get_stats, clear_posts
+from database import init_db, query_posts, get_stats, clear_posts, get_jobs
 
 SCRAPER_DB    = os.path.join(ROOT_DIR, "scraper_db.py")
 DASHBOARD_HTML = os.path.join(API_DIR, "templates", "index.html")
@@ -124,6 +124,12 @@ async def api_clear_posts():
     """Delete all posts from the database."""
     clear_posts()
     return {"status": "ok", "message": "All posts cleared."}
+
+
+@app.get("/api/jobs")
+async def api_jobs(limit: int = Query(20, le=100)):
+    """Return recent scrape job logs."""
+    return get_jobs(limit=limit)
 
 
 @app.get("/api/health")

@@ -34,9 +34,25 @@ def get_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+CREATE_JOBS_SQL = """
+CREATE TABLE IF NOT EXISTS scrape_jobs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at      TEXT NOT NULL,
+    finished_at     TEXT,
+    status          TEXT DEFAULT 'running',
+    captured        INTEGER DEFAULT 0,
+    saved           INTEGER DEFAULT 0,
+    skipped_age     INTEGER DEFAULT 0,
+    skipped_group   INTEGER DEFAULT 0,
+    duration_sec    REAL,
+    error           TEXT
+);
+"""
+
 def init_db():
     conn = get_connection()
     conn.execute(CREATE_TABLE_SQL)
+    conn.execute(CREATE_JOBS_SQL)
     conn.commit()
     conn.close()
 
@@ -128,6 +144,30 @@ def clear_posts():
     conn2 = get_connection()
     conn2.execute("VACUUM")
     conn2.close()
+
+def create_job(started_at):
+    conn = get_connection()
+    cur = conn.execute("INSERT INTO scrape_jobs (started_at) VALUES (?)", (started_at,))
+    job_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return job_id
+
+def update_job(job_id, **kwargs):
+    conn = get_connection()
+    sets = ", ".join(f"{k} = ?" for k in kwargs)
+    vals = list(kwargs.values()) + [job_id]
+    conn.execute(f"UPDATE scrape_jobs SET {sets} WHERE id = ?", vals)
+    conn.commit()
+    conn.close()
+
+def get_jobs(limit=20):
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM scrape_jobs ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 def get_stats():
     conn = get_connection()

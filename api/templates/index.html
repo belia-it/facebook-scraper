@@ -110,6 +110,27 @@
     }
     .tbl-link:hover { color: #a78bfa; text-decoration: underline; }
     .tbl-date { white-space: nowrap; color: rgba(255,255,255,0.5); font-size: 0.8rem; }
+
+    /* ── Job Logs ──────────────────────────────────────────────────────── */
+    .jobs-section { margin-top: 32px; }
+    .jobs-section h2 {
+      font-size: 1.1rem; font-weight: 600; color: rgba(255,255,255,0.8);
+      margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+    }
+    .jobs-toggle {
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.6); padding: 4px 12px; border-radius: 6px;
+      font-size: 0.75rem; cursor: pointer; font-family: inherit;
+    }
+    .jobs-toggle:hover { background: rgba(255,255,255,0.12); color: #fff; }
+    .job-status {
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+    }
+    .job-status.success { background: rgba(16,185,129,0.2); color: #34d399; }
+    .job-status.running { background: rgba(59,130,246,0.2); color: #60a5fa; }
+    .job-status.error   { background: rgba(239,68,68,0.2); color: #f87171; }
+    .job-status.empty   { background: rgba(251,191,36,0.2); color: #fbbf24; }
   </style>
 </head>
 <body>
@@ -199,6 +220,33 @@
       <div class="loading-state">
         <div class="spinner"></div>
         <p>Loading posts...</p>
+      </div>
+    </div>
+  </div>
+
+    <!-- Job Logs -->
+    <div class="jobs-section">
+      <h2>📋 Scrape Jobs <button class="jobs-toggle" onclick="toggleJobs()">Show/Hide</button></h2>
+      <div id="jobs-container" style="display:none">
+        <div class="posts-table-wrapper">
+          <table class="posts-table" id="jobs-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Started</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Captured</th>
+                <th>Saved</th>
+                <th>Skipped (age)</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody id="jobs-tbody">
+              <tr><td colspan="8" style="text-align:center;color:rgba(255,255,255,0.3)">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -577,6 +625,43 @@
       countLabel.textContent = `Showing ${currentCount + 1} posts`;
 
       refreshStats();
+    }
+
+    // ─── Job Logs ──────────────────────────────────────────────────────────
+    let jobsVisible = false;
+    function toggleJobs() {
+      jobsVisible = !jobsVisible;
+      document.getElementById('jobs-container').style.display = jobsVisible ? 'block' : 'none';
+      if (jobsVisible) loadJobs();
+    }
+
+    async function loadJobs() {
+      try {
+        const res = await fetch('/api/jobs?limit=20');
+        const jobs = await res.json();
+        const tbody = document.getElementById('jobs-tbody');
+        if (!jobs.length) {
+          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:rgba(255,255,255,0.3)">No jobs yet</td></tr>';
+          return;
+        }
+        tbody.innerHTML = jobs.map(j => {
+          const started = j.started_at ? new Date(j.started_at).toLocaleString() : '—';
+          const dur = j.duration_sec ? j.duration_sec + 's' : '—';
+          const statusCls = j.status || 'running';
+          return `<tr>
+            <td>${j.id}</td>
+            <td class="tbl-date">${started}</td>
+            <td><span class="job-status ${statusCls}">${j.status || 'running'}</span></td>
+            <td>${dur}</td>
+            <td>${j.captured ?? '—'}</td>
+            <td>${j.saved ?? '—'}</td>
+            <td>${j.skipped_age ?? '—'}</td>
+            <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:rgba(255,255,255,0.4)">${escapeHtml(j.error || '—')}</td>
+          </tr>`;
+        }).join('');
+      } catch(e) {
+        document.getElementById('jobs-tbody').innerHTML = '<tr><td colspan="8" style="color:#f87171">Failed to load jobs</td></tr>';
+      }
     }
 
     // ─── Init ─────────────────────────────────────────────────────────────

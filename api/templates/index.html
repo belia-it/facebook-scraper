@@ -116,6 +116,102 @@
     .sort-arrow.asc::after { content: ' ▲'; }
     .sort-arrow.desc::after { content: ' ▼'; }
 
+    /* ── Scraper Toast ──────────────────────────────────────────────────── */
+    .scrape-toast {
+      position: fixed; top: 20px; right: 20px; z-index: 900;
+      width: 310px; border-radius: 14px;
+      background: rgba(22, 22, 42, 0.95);
+      border: 1px solid rgba(59,130,246,0.3);
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5), 0 0 80px rgba(59,130,246,0.06);
+      backdrop-filter: blur(20px);
+      font-size: 0.82rem; color: rgba(255,255,255,0.9);
+      transform: translateX(360px); opacity: 0;
+      transition: transform 0.4s cubic-bezier(0.22,1,0.36,1), opacity 0.3s ease;
+      overflow: hidden;
+    }
+    .scrape-toast.visible { transform: translateX(0); opacity: 1; }
+    .scrape-toast.done { border-color: rgba(16,185,129,0.4); box-shadow: 0 8px 40px rgba(0,0,0,0.5), 0 0 80px rgba(16,185,129,0.06); }
+    .scrape-toast.error { border-color: rgba(239,68,68,0.4); box-shadow: 0 8px 40px rgba(0,0,0,0.5), 0 0 80px rgba(239,68,68,0.06); }
+
+    .scrape-toast-header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 13px 16px; cursor: pointer; user-select: none;
+      transition: background 0.15s;
+    }
+    .scrape-toast-header:hover { background: rgba(255,255,255,0.04); }
+
+    .st-dot {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+      background: #60a5fa;
+      box-shadow: 0 0 8px rgba(96,165,250,0.5);
+      animation: st-pulse 1.5s ease infinite;
+    }
+    .scrape-toast.done .st-dot { background: #34d399; box-shadow: 0 0 8px rgba(52,211,153,0.5); animation: none; }
+    .scrape-toast.error .st-dot { background: #f87171; box-shadow: 0 0 8px rgba(248,113,113,0.5); animation: none; }
+    @keyframes st-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.75)} }
+
+    .st-title { flex: 1; font-weight: 600; font-size: 0.82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .st-time { font-size: 0.7rem; color: rgba(255,255,255,0.3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+    .st-chevron {
+      color: rgba(255,255,255,0.25); font-size: 0.6rem;
+      transition: transform 0.25s ease;
+    }
+    .scrape-toast.expanded .st-chevron { transform: rotate(180deg); }
+
+    .st-body {
+      max-height: 0; overflow: hidden;
+      transition: max-height 0.35s cubic-bezier(0.22,1,0.36,1);
+      border-top: 0px solid transparent;
+    }
+    .scrape-toast.expanded .st-body {
+      max-height: 250px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .st-inner { padding: 12px 16px 14px; }
+
+    .st-phase {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 10px; color: rgba(255,255,255,0.65); font-size: 0.78rem;
+    }
+    .st-mini-spin {
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.1);
+      border-top-color: #60a5fa;
+      border-radius: 50%;
+      animation: st-spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes st-spin { to { transform: rotate(360deg); } }
+    .scrape-toast.done .st-mini-spin { border-top-color: #34d399; animation: none; border-color: rgba(52,211,153,0.3); }
+    .scrape-toast.error .st-mini-spin { display: none; }
+
+    .st-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 2px 16px;
+    }
+    .st-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 5px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .st-lbl { color: rgba(255,255,255,0.35); font-size: 0.73rem; }
+    .st-val { color: rgba(255,255,255,0.85); font-weight: 600; font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+
+    .st-bar {
+      height: 3px; background: rgba(255,255,255,0.06);
+      border-radius: 3px; margin-top: 12px; overflow: hidden;
+    }
+    .st-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+      border-radius: 3px;
+      transition: width 0.6s cubic-bezier(0.22,1,0.36,1);
+      width: 0%;
+    }
+    .scrape-toast.done .st-bar-fill { background: linear-gradient(90deg, #10b981, #34d399); width: 100%; }
+    .scrape-toast.error .st-bar-fill { background: #f87171; width: 100%; }
+
     /* ── Job Logs ──────────────────────────────────────────────────────── */
     .jobs-section { margin-top: 32px; }
     .jobs-section h2 {

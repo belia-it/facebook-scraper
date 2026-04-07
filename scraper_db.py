@@ -502,6 +502,7 @@ def main():
     print(f"   ref_time (UTC+{TIMEZONE_OFFSET}): {ref_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     captured = {}
+    saved_count = [0]  # mutable counter for incremental saves
 
     def process_raw_data(raw_text):
         """Extract posts from raw text (HTML or JSON)."""
@@ -712,7 +713,7 @@ def main():
                 print(f"   HTML extraction error: {e}")
 
             # 2. Parse collected response bodies
-            report_progress("extracting", f"Processing {len(response_bodies)} responses...", captured=len(captured))
+            report_progress("extracting", f"Processing {len(response_bodies)} responses...", captured=len(captured), saved=saved_count[0])
             print(f"   Processing {len(response_bodies)} collected responses...")
             for body in response_bodies:
                 process_raw_data(body)
@@ -725,7 +726,6 @@ def main():
                     url = row['post_url']
                     if GROUP_SLUG and f"/groups/{GROUP_SLUG.lower()}" not in url.lower():
                         continue
-                    # Age filter
                     try:
                         p_date, p_time = row.get('post_date'), row.get('post_time')
                         if p_date and p_time:
@@ -735,26 +735,17 @@ def main():
                                 continue
                     except:
                         pass
-                    try:
-                        p_date, p_time = row.get('post_date'), row.get('post_time')
-                        if p_date and p_time:
-                            fmt = '%Y-%m-%d %H:%M:%S' if len(p_time) > 5 else '%Y-%m-%d %H:%M'
-                            p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", fmt)
-                            age_min = (ref_time - p_dt).total_seconds() / 60
-                            if age_min > AGE_LIMIT_MINUTES:
-                                continue
-                    except:
-                        pass
                     post_id = extract_post_id(url)
                     if url in existing or (post_id and post_id in existing):
                         continue
                     try:
                         upsert_post(conn, row)
                         existing.add(url)
+                        saved_count[0] += 1
                     except:
                         pass
                 conn.commit()
-                print(f"   Initial save done.")
+                print(f"   Initial save: {saved_count[0]} posts.")
 
             # 3. Scroll to trigger more content
             print("   Scrolling for more...")
@@ -801,7 +792,7 @@ def main():
                     stall = 0
 
                 if i % 3 == 0:
-                    report_progress("scrolling", f"Scroll {i+1}/{MAX_SCROLLS}", captured=len(captured), scroll=i+1, max_scroll=MAX_SCROLLS)
+                    report_progress("scrolling", f"Scroll {i+1}/{MAX_SCROLLS}", captured=len(captured), saved=saved_count[0], scroll=i+1, max_scroll=MAX_SCROLLS)
                     print(f"   Scroll {i+1}/{MAX_SCROLLS} | Posts: {len(captured)}")
                 # Incremental save every 5 scrolls
                 if i > 0 and i % 5 == 0:
@@ -825,6 +816,7 @@ def main():
                         try:
                             upsert_post(conn, row)
                             existing.add(url)
+                            saved_count[0] += 1
                         except:
                             pass
                     conn.commit()

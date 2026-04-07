@@ -482,6 +482,25 @@
           <div id="auth-info" style="font-size:0.78rem;color:rgba(255,255,255,0.6)"></div>
         </div>
 
+
+        <!-- Scraper Settings -->
+        <div class="glass-panel" style="padding:20px;margin-bottom:20px">
+          <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:14px;color:rgba(255,255,255,0.7)">Scraper Settings</h3>
+          <div style="display:grid;grid-template-columns:160px 1fr auto;gap:10px 14px;align-items:center;margin-bottom:14px">
+            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">Age Limit (minutes)</label>
+            <input type="number" id="set-age" min="1" max="1440" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;width:100px">
+            <span style="font-size:0.72rem;color:rgba(255,255,255,0.3)">Only save posts newer than this</span>
+            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">Max Scrolls</label>
+            <input type="number" id="set-scrolls" min="5" max="100" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;width:100px">
+            <span style="font-size:0.72rem;color:rgba(255,255,255,0.3)">How far to scroll the feed</span>
+            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">Timezone Offset</label>
+            <input type="number" id="set-tz" min="-12" max="14" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;width:100px">
+            <span style="font-size:0.72rem;color:rgba(255,255,255,0.3)">UTC offset (Tunisia = 1)</span>
+          </div>
+          <button class="btn-primary" onclick="saveSettings()" style="font-size:0.82rem;padding:8px 16px">Save Settings</button>
+          <span id="settings-result" style="margin-left:12px;font-size:0.78rem;color:rgba(255,255,255,0.5)"></span>
+        </div>
+
         <!-- Upload Auth File -->
         <div class="glass-panel" style="padding:20px;margin-bottom:20px">
           <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:12px;color:rgba(255,255,255,0.7)">Upload Auth File</h3>
@@ -1160,6 +1179,36 @@
       }
     }
 
+    // ─── Scraper Settings ────────────────────────────────────────────────
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/settings');
+        const s = await res.json();
+        document.getElementById('set-age').value = s.AGE_LIMIT_MINUTES || 59;
+        document.getElementById('set-scrolls').value = s.MAX_SCROLLS || 35;
+        document.getElementById('set-tz').value = s.TIMEZONE_OFFSET || 1;
+      } catch(e) {}
+    }
+
+    async function saveSettings() {
+      const result = document.getElementById('settings-result');
+      result.textContent = 'Saving...';
+      result.style.color = 'rgba(255,255,255,0.5)';
+      try {
+        const fd = new FormData();
+        fd.append('AGE_LIMIT_MINUTES', document.getElementById('set-age').value);
+        fd.append('MAX_SCROLLS', document.getElementById('set-scrolls').value);
+        fd.append('TIMEZONE_OFFSET', document.getElementById('set-tz').value);
+        const res = await fetch('/api/settings', { method: 'POST', body: fd });
+        const data = await res.json();
+        result.textContent = '\u2713 ' + data.message;
+        result.style.color = '#34d399';
+      } catch(e) {
+        result.textContent = '\u2717 Save failed';
+        result.style.color = '#f87171';
+      }
+    }
+
     // ─── Auth Management ────────────────────────────────────────────────
     async function loadAuthStatus() {
       try {
@@ -1296,7 +1345,7 @@
       document.getElementById('tab-' + tab).classList.add('active');
       document.getElementById('pill-' + tab).classList.add('active');
       if (tab === 'jobs') loadJobs();
-      if (tab === 'settings') loadAuthStatus();
+      if (tab === 'settings') { loadAuthStatus(); loadSettings(); }
     }
 
     function updatePillBadges() {

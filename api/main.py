@@ -149,6 +149,62 @@ async def api_jobs(limit: int = Query(20, le=100)):
 
 
 
+# ── Settings ───────────────────────────────────────────────────────────────
+DOTENV_PATH = os.path.join(ROOT_DIR, ".env")
+
+@app.get("/api/settings")
+async def get_settings():
+    """Return current .env settings."""
+    from dotenv import dotenv_values
+    vals = dotenv_values(DOTENV_PATH)
+    return {
+        "AGE_LIMIT_MINUTES": int(vals.get("AGE_LIMIT_MINUTES", "59")),
+        "MAX_SCROLLS": int(vals.get("MAX_SCROLLS", "35")),
+        "GROUP_URL": vals.get("GROUP_URL", ""),
+        "TIMEZONE_OFFSET": int(vals.get("TIMEZONE_OFFSET", "1")),
+        "HEADLESS": vals.get("HEADLESS", "true"),
+    }
+
+@app.post("/api/settings")
+async def update_settings(
+    AGE_LIMIT_MINUTES: int = Form(None),
+    MAX_SCROLLS: int = Form(None),
+    TIMEZONE_OFFSET: int = Form(None),
+):
+    """Update .env settings."""
+    from dotenv import dotenv_values
+    vals = dotenv_values(DOTENV_PATH)
+
+    if AGE_LIMIT_MINUTES is not None:
+        vals["AGE_LIMIT_MINUTES"] = str(AGE_LIMIT_MINUTES)
+    if MAX_SCROLLS is not None:
+        vals["MAX_SCROLLS"] = str(MAX_SCROLLS)
+    if TIMEZONE_OFFSET is not None:
+        vals["TIMEZONE_OFFSET"] = str(TIMEZONE_OFFSET)
+
+    # Read existing .env to preserve unknown keys
+    lines = []
+    existing_keys = set()
+    if os.path.exists(DOTENV_PATH):
+        with open(DOTENV_PATH) as f:
+            for line in f:
+                key = line.split("=")[0].strip()
+                if key in vals:
+                    lines.append(f"{key}={vals[key]}\n")
+                    existing_keys.add(key)
+                else:
+                    lines.append(line)
+    # Add new keys
+    for k, v in vals.items():
+        if k not in existing_keys:
+            lines.append(f"{k}={v}\n")
+
+    with open(DOTENV_PATH, 'w') as f:
+        f.writelines(lines)
+
+    return {"status": "ok", "message": "Settings saved. Restart scraper to apply."}
+
+
 # ── Auth Management ────────────────────────────────────────────────────────
 AUTH_FILE = os.path.join(ROOT_DIR, os.getenv("STORAGE_STATE", "facebook_auth.json"))
 CRITICAL_COOKIES = {"c_user", "xs", "datr", "sb", "fr"}

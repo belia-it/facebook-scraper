@@ -3,8 +3,10 @@ import sys
 import subprocess
 from contextlib import asynccontextmanager
 from typing import List
-from fastapi import FastAPI, Query, BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+import json as _json
+from datetime import datetime as _dt
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -144,6 +146,108 @@ async def scrape_status():
 async def api_jobs(limit: int = Query(20, le=100)):
     """Return recent scrape job logs."""
     return get_jobs(limit=limit)
+
+
+
+# ── Auth Management ────────────────────────────────────────────────────────
+AUTH_FILE = os.path.join(ROOT_DIR, os.getenv("STORAGE_STATE", "facebook_auth.json"))
+CRITICAL_COOKIES = {"c_user", "xs", "datr", "sb", "fr"}
+
+
+@app.get("/api/auth/status")
+async def auth_status():
+    """Return current Facebook auth status."""
+    if not os.path.exists(AUTH_FILE):
+        return {"status": "missing", "message": "No auth file found", "cookies": 0, "critical": {}}
+
+    try:
+        with open(AUTH_FILE) as f:
+            data = _json.load(f)
+        cookies = data.get("cookies", [])
+        cookie_names = {c.get("name") for c in cookies}
+        critical_status = {name: name in cookie_names for name in CRITICAL_COOKIES}
+        all_critical = all(critical_status.get(k) for k in ("c_user", "xs"))
+
+        # File age
+        mtime = os.path.getmtime(AUTH_FILE)
+        modified = _dt.fromtimestamp(mtime).isoformat()
+        age_hours = ((_dt.now().timestamp() - mtime) / 3600)
+
+        return {
+            "status": "valid" if all_critical else "expired",
+            "message": "Session active" if all_critical else "Missing critical cookies (c_user/xs)",
+            "cookies": len(cookies),
+            "cookie_names": sorted(cookie_names),
+            "critical": critical_status,
+            "file_modified": modified,
+            "age_hours": round(age_hours, 1),
+            "file_path": AUTH_FILE,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e), "cookies": 0, "critical": {}}
+
+
+@app.post("/api/auth/upload")
+async def auth_upload(file: UploadFile = File(...)):
+    """Upload a facebook_auth.json file."""
+    try:
+        raw = await file.read()
+        data = _json.loads(raw)
+        if "cookies" not in data:
+            raise HTTPException(status_code=400, detail="Invalid auth file: no 'cookies' key")
+        cookies = data["cookies"]
+        names = {c.get("name") for c in cookies}
+        if "c_user" not in names or "xs" not in names:
+            raise HTTPException(status_code=400, detail="Auth file missing critical cookies (c_user, xs)")
+        with open(AUTH_FILE, 'w') as f:
+            _json.dump(data, f, indent=2)
+        return {"status": "ok", "message": f"Auth file updated with {len(cookies)} cookies"}
+    except _json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON file")
+
+
+@app.post("/api/auth/cookies")
+async def auth_set_cookies(
+    c_user: str = Form(...),
+    xs: str = Form(...),
+    datr: str = Form(""),
+    sb: str = Form(""),
+    fr: str = Form(""),
+):
+    """Set Facebook cookies manually."""
+    # Load existing auth or create new
+    data = {"cookies": [], "origins": []}
+    if os.path.exists(AUTH_FILE):
+        try:
+            with open(AUTH_FILE) as f:
+                data = _json.load(f)
+        except:
+            pass
+
+    existing = {c.get("name"): i for i, c in enumerate(data.get("cookies", []))}
+    base = {"domain": ".facebook.com", "path": "/", "httpOnly": True, "secure": True, "sameSite": "None"}
+
+    for name, value in [("c_user", c_user), ("xs", xs), ("datr", datr), ("sb", sb), ("fr", fr)]:
+        if not value:
+            continue
+        cookie = {**base, "name": name, "value": value}
+        if name in existing:
+            data["cookies"][existing[name]] = cookie
+        else:
+            data["cookies"].append(cookie)
+
+    with open(AUTH_FILE, 'w') as f:
+        _json.dump(data, f, indent=2)
+
+    return {"status": "ok", "message": f"Cookies updated ({len(data['cookies'])} total)"}
+
+
+@app.delete("/api/auth")
+async def auth_clear():
+    """Delete the auth file."""
+    if os.path.exists(AUTH_FILE):
+        os.remove(AUTH_FILE)
+    return {"status": "ok", "message": "Auth file deleted"}
 
 
 @app.get("/api/health")

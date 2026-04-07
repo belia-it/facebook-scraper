@@ -380,6 +380,9 @@
       <button class="nav-pill" onclick="switchTab('jobs')" id="pill-jobs">
         <span class="pill-icon">&#x23F1;</span> Jobs <span class="pill-badge" id="pill-jobs-count">0</span>
       </button>
+      <button class="nav-pill" onclick="switchTab('settings')" id="pill-settings">
+        <span class="pill-icon">&#x2699;</span> Settings
+      </button>
     </nav>
 
     <!-- Tab: Posts -->
@@ -461,6 +464,61 @@
     </div>
     </div>
     <!-- /Tab: Jobs -->
+
+    <!-- Tab: Settings -->
+    <div class="tab-panel" id="tab-settings">
+      <div class="settings-section">
+        <h2 style="font-size:1.1rem;font-weight:600;color:rgba(255,255,255,0.8);margin-bottom:20px">Facebook Authentication</h2>
+
+        <!-- Auth Status Card -->
+        <div class="glass-panel" style="padding:20px;margin-bottom:20px" id="auth-card">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+            <div id="auth-dot" style="width:12px;height:12px;border-radius:50%;background:#f87171"></div>
+            <div>
+              <div id="auth-status-text" style="font-weight:600;font-size:0.9rem">Checking...</div>
+              <div id="auth-status-detail" style="font-size:0.75rem;color:rgba(255,255,255,0.4)"></div>
+            </div>
+          </div>
+          <div id="auth-info" style="font-size:0.78rem;color:rgba(255,255,255,0.6)"></div>
+        </div>
+
+        <!-- Upload Auth File -->
+        <div class="glass-panel" style="padding:20px;margin-bottom:20px">
+          <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:12px;color:rgba(255,255,255,0.7)">Upload Auth File</h3>
+          <p style="font-size:0.78rem;color:rgba(255,255,255,0.4);margin-bottom:12px">Upload a <code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px">facebook_auth.json</code> file exported from Playwright.</p>
+          <input type="file" id="auth-file-input" accept=".json" style="display:none" onchange="uploadAuthFile(this)">
+          <button class="btn-primary" onclick="document.getElementById('auth-file-input').click()" style="font-size:0.82rem;padding:8px 16px">Choose File...</button>
+          <span id="upload-result" style="margin-left:12px;font-size:0.78rem;color:rgba(255,255,255,0.5)"></span>
+        </div>
+
+        <!-- Manual Cookie Entry -->
+        <div class="glass-panel" style="padding:20px;margin-bottom:20px">
+          <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:12px;color:rgba(255,255,255,0.7)">Manual Cookie Entry</h3>
+          <p style="font-size:0.78rem;color:rgba(255,255,255,0.4);margin-bottom:14px">Paste cookie values from your browser. Only <strong>c_user</strong> and <strong>xs</strong> are required.</p>
+          <div style="display:grid;grid-template-columns:100px 1fr;gap:8px 12px;align-items:center;margin-bottom:14px">
+            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">c_user *</label>
+            <input type="text" id="cookie-c_user" placeholder="Your Facebook user ID" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-family:monospace">
+            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">xs *</label>
+            <input type="text" id="cookie-xs" placeholder="Session token" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-family:monospace">
+            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">datr</label>
+            <input type="text" id="cookie-datr" placeholder="Optional" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-family:monospace">
+            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">sb</label>
+            <input type="text" id="cookie-sb" placeholder="Optional" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-family:monospace">
+            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">fr</label>
+            <input type="text" id="cookie-fr" placeholder="Optional" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-family:monospace">
+          </div>
+          <button class="btn-primary" onclick="saveCookies()" style="font-size:0.82rem;padding:8px 16px">Save Cookies</button>
+          <span id="cookie-result" style="margin-left:12px;font-size:0.78rem;color:rgba(255,255,255,0.5)"></span>
+        </div>
+
+        <!-- Danger Zone -->
+        <div class="glass-panel" style="padding:20px;border-color:rgba(239,68,68,0.2)">
+          <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:12px;color:rgba(248,113,113,0.8)">Danger Zone</h3>
+          <button class="btn-ghost" onclick="deleteAuth()" style="color:#f87171;border-color:rgba(248,113,113,0.3);font-size:0.82rem;padding:8px 16px">Delete Auth File</button>
+        </div>
+      </div>
+    </div>
+    <!-- /Tab: Settings -->
 
   </div>
 
@@ -1102,6 +1160,133 @@
       }
     }
 
+    // ─── Auth Management ────────────────────────────────────────────────
+    async function loadAuthStatus() {
+      try {
+        const res = await fetch('/api/auth/status');
+        const a = await res.json();
+        const dot = document.getElementById('auth-dot');
+        const text = document.getElementById('auth-status-text');
+        const detail = document.getElementById('auth-status-detail');
+        const info = document.getElementById('auth-info');
+
+        if (a.status === 'valid') {
+          dot.style.background = '#34d399';
+          dot.style.boxShadow = '0 0 8px rgba(52,211,153,0.5)';
+          text.textContent = 'Session Active';
+          text.style.color = '#34d399';
+        } else if (a.status === 'expired') {
+          dot.style.background = '#fbbf24';
+          dot.style.boxShadow = '0 0 8px rgba(251,191,36,0.5)';
+          text.textContent = 'Session Expired';
+          text.style.color = '#fbbf24';
+        } else if (a.status === 'missing') {
+          dot.style.background = '#f87171';
+          dot.style.boxShadow = '0 0 8px rgba(248,113,113,0.5)';
+          text.textContent = 'No Auth File';
+          text.style.color = '#f87171';
+        } else {
+          dot.style.background = '#f87171';
+          text.textContent = 'Error';
+          text.style.color = '#f87171';
+        }
+
+        detail.textContent = a.message || '';
+
+        let infoHtml = '';
+        if (a.cookies) infoHtml += '<div style="margin-bottom:6px"><strong>' + a.cookies + '</strong> cookies stored</div>';
+        if (a.file_modified) infoHtml += '<div style="margin-bottom:6px">Last modified: <strong>' + new Date(a.file_modified).toLocaleString() + '</strong> (' + a.age_hours + 'h ago)</div>';
+        if (a.critical) {
+          infoHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">';
+          for (const [name, ok] of Object.entries(a.critical)) {
+            const color = ok ? 'rgba(52,211,153,0.8)' : 'rgba(248,113,113,0.8)';
+            const icon = ok ? '\u2713' : '\u2717';
+            infoHtml += '<span style="font-size:0.72rem;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,0.06);color:' + color + '">' + icon + ' ' + name + '</span>';
+          }
+          infoHtml += '</div>';
+        }
+        info.innerHTML = infoHtml;
+      } catch(e) {
+        document.getElementById('auth-status-text').textContent = 'Failed to load';
+      }
+    }
+
+    async function uploadAuthFile(input) {
+      const file = input.files[0];
+      if (!file) return;
+      const result = document.getElementById('upload-result');
+      result.textContent = 'Uploading...';
+      result.style.color = 'rgba(255,255,255,0.5)';
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch('/api/auth/upload', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (res.ok) {
+          result.textContent = '\u2713 ' + data.message;
+          result.style.color = '#34d399';
+          loadAuthStatus();
+        } else {
+          result.textContent = '\u2717 ' + (data.detail || 'Upload failed');
+          result.style.color = '#f87171';
+        }
+      } catch(e) {
+        result.textContent = '\u2717 Upload failed';
+        result.style.color = '#f87171';
+      }
+      input.value = '';
+    }
+
+    async function saveCookies() {
+      const c_user = document.getElementById('cookie-c_user').value.trim();
+      const xs = document.getElementById('cookie-xs').value.trim();
+      const result = document.getElementById('cookie-result');
+
+      if (!c_user || !xs) {
+        result.textContent = '\u2717 c_user and xs are required';
+        result.style.color = '#f87171';
+        return;
+      }
+
+      result.textContent = 'Saving...';
+      result.style.color = 'rgba(255,255,255,0.5)';
+      try {
+        const fd = new FormData();
+        fd.append('c_user', c_user);
+        fd.append('xs', xs);
+        ['datr', 'sb', 'fr'].forEach(name => {
+          const val = document.getElementById('cookie-' + name).value.trim();
+          if (val) fd.append(name, val);
+        });
+        const res = await fetch('/api/auth/cookies', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (res.ok) {
+          result.textContent = '\u2713 ' + data.message;
+          result.style.color = '#34d399';
+          loadAuthStatus();
+          // Clear inputs
+          ['c_user', 'xs', 'datr', 'sb', 'fr'].forEach(n => document.getElementById('cookie-' + n).value = '');
+        } else {
+          result.textContent = '\u2717 ' + (data.detail || 'Save failed');
+          result.style.color = '#f87171';
+        }
+      } catch(e) {
+        result.textContent = '\u2717 Save failed';
+        result.style.color = '#f87171';
+      }
+    }
+
+    async function deleteAuth() {
+      if (!confirm('Delete the Facebook auth file? You will need to re-authenticate.')) return;
+      try {
+        await fetch('/api/auth', { method: 'DELETE' });
+        showToast('Auth file deleted');
+        loadAuthStatus();
+      } catch(e) {
+        showToast('Failed to delete auth file');
+      }
+    }
+
     // ─── Tab Navigation ────────────────────────────────────────────────
     let activeTab = 'posts';
     function switchTab(tab) {
@@ -1111,6 +1296,7 @@
       document.getElementById('tab-' + tab).classList.add('active');
       document.getElementById('pill-' + tab).classList.add('active');
       if (tab === 'jobs') loadJobs();
+      if (tab === 'settings') loadAuthStatus();
     }
 
     function updatePillBadges() {

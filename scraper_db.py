@@ -178,13 +178,15 @@ def extract_data_blocks(raw_text):
 
 STORY_TYPENAMES = {
     "Story", "FeedUnit", "GroupFeedStory", "GroupPost",
-    "UserPost", "FeedStory", "GroupCommerceProductItem"
+    "UserPost", "FeedStory", "GroupCommerceProductItem",
+    "GroupFeedUnit", "CometFeedStory", "FeedObject",
+    "GroupDiscussionRootStory", "GroupQuestion",
 }
 # Typenames to EXCLUDE — these are not posts
 EXCLUDED_TYPENAMES = {
     "Notification", "NotificationStory", "FeedbackReaction",
     "PageLikeAction", "ProfileIntroCard", "StoryBucket",
-    "GroupMemberBadge", "GroupMemberProfile", "GroupQuestion",
+    "GroupMemberBadge", "GroupMemberProfile",
     "Comment", "Reply", "UFFeedback", "Feedback",
     "MarketplaceListing", "Event", "FundraiserStory",
     "AdStory", "SponsoredStory", "PageStory",
@@ -212,15 +214,24 @@ def find_stories(obj):
             ("author" in obj and isinstance(obj["author"], dict))
         )
         has_post_id = "post_id" in obj or ("id" in obj and isinstance(obj.get("id"), str))
+        has_message = "message" in obj and isinstance(obj.get("message"), dict)
+        has_url = "url" in obj and isinstance(obj.get("url"), str) and "facebook.com" in (obj.get("url") or "")
 
         if typename in EXCLUDED_TYPENAMES:
             for v in obj.values():
                 found.extend(find_stories(v))
             return found
+
         is_story = typename in STORY_TYPENAMES
         if not is_story and has_time and has_actors:
             is_story = True
         if not is_story and has_time and has_post_id:
+            is_story = True
+        # Broader: object with message text + any identifier (time, url, or id)
+        if not is_story and has_message and (has_time or has_url or has_post_id):
+            is_story = True
+        # Even broader: object with comet_sections (Facebook's story wrapper)
+        if not is_story and "comet_sections" in obj and (has_time or has_post_id):
             is_story = True
 
         if is_story:
@@ -264,11 +275,24 @@ def find_actual_message(s):
     Priority 1: message -> text  (most reliable)
     Priority 2: recursive search for 'text' key, skipping FB internal labels
     """
+    # Direct message field
     m = s.get("message")
     if isinstance(m, dict) and "text" in m:
         t = m["text"].strip()
         if t and t not in _FB_INTERNAL_LABELS:
             return t
+    # Try comet_sections -> content -> story -> message -> text
+    cs = s.get("comet_sections")
+    if isinstance(cs, dict):
+        content_obj = cs.get("content")
+        if isinstance(content_obj, dict):
+            story_obj = content_obj.get("story")
+            if isinstance(story_obj, dict):
+                m2 = story_obj.get("message")
+                if isinstance(m2, dict) and "text" in m2:
+                    t = m2["text"].strip()
+                    if t and t not in _FB_INTERNAL_LABELS:
+                        return t
 
     def check_text(obj):
         if isinstance(obj, dict):
@@ -318,6 +342,66 @@ def find_actual_user(s):
         name = author.get("name")
         if name and name not in ("Unknown User", ""):
             return name
+
+    # Try owning_profile or target -> name
+    for pk in ("owning_profile", "target", "node"):
+        pv = s.get(pk)
+        if isinstance(pv, dict):
+            name = pv.get("name")
+            if name and name not in ("Unknown User", ""):
+                return name
+
+    # Try tracking -> content_owner -> name
+    tracking = s.get("tracking")
+    if isinstance(tracking, dict):
+        co = tracking.get("content_owner")
+        if isinstance(co, dict):
+            name = co.get("name")
+            if name and name not in ("Unknown User", ""):
+                return name
+
+    # Recursive search for first name in an actor-like object
+    def find_author_name(obj, depth=0):
+        if depth > 5:
+            return None
+        if isinstance(obj, dict):
+            tn = obj.get("__typename", "")
+            if ("User" in tn or "Profile" in tn or "Author" in tn or "Actor" in tn) and "name" in obj:
+                n = obj["name"]
+                if n and n not in ("Unknown User", "", "Facebook") and len(n) > 1:
+                    return n
+            for v in obj.values():
+                r = find_author_name(v, depth+1)
+                if r:
+                    return r
+        elif isinstance(obj, list):
+            for v in obj:
+                r = find_author_name(v, depth+1)
+                if r:
+                    return r
+        return None
+
+    deep_name = find_author_name(s)
+    if deep_name:
+        return deep_name
+
+    # Try comet_sections -> content -> story -> actors
+    cs = s.get("comet_sections")
+    if isinstance(cs, dict):
+        content_obj = cs.get("content")
+        if isinstance(content_obj, dict):
+            story_obj = content_obj.get("story")
+            if isinstance(story_obj, dict):
+                for ak in ("actors", "actor", "author"):
+                    av = story_obj.get(ak)
+                    if isinstance(av, list) and av:
+                        name = av[0].get("name") if isinstance(av[0], dict) else None
+                        if name and name != "Unknown User":
+                            return name
+                    elif isinstance(av, dict):
+                        name = av.get("name")
+                        if name and name != "Unknown User":
+                            return name
 
     return "Unknown User"
 

@@ -725,6 +725,16 @@ def main():
                     url = row['post_url']
                     if GROUP_SLUG and f"/groups/{GROUP_SLUG.lower()}" not in url.lower():
                         continue
+                    # Age filter
+                    try:
+                        p_date, p_time = row.get('post_date'), row.get('post_time')
+                        if p_date and p_time:
+                            fmt = '%Y-%m-%d %H:%M:%S' if len(p_time) > 5 else '%Y-%m-%d %H:%M'
+                            p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", fmt)
+                            if (ref_time - p_dt).total_seconds() / 60 > AGE_LIMIT_MINUTES:
+                                continue
+                    except:
+                        pass
                     try:
                         p_date, p_time = row.get('post_date'), row.get('post_time')
                         if p_date and p_time:
@@ -799,6 +809,16 @@ def main():
                         url = row['post_url']
                         if GROUP_SLUG and f"/groups/{GROUP_SLUG.lower()}" not in url.lower():
                             continue
+                        # Age filter
+                        try:
+                            p_date, p_time = row.get('post_date'), row.get('post_time')
+                            if p_date and p_time:
+                                fmt = '%Y-%m-%d %H:%M:%S' if len(p_time) > 5 else '%Y-%m-%d %H:%M'
+                                p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", fmt)
+                                if (ref_time - p_dt).total_seconds() / 60 > AGE_LIMIT_MINUTES:
+                                    continue
+                        except:
+                            pass
                         post_id_check = extract_post_id(url)
                         if url in existing or (post_id_check and post_id_check in existing):
                             continue
@@ -809,15 +829,31 @@ def main():
                             pass
                     conn.commit()
 
-            # Final HTML parse after scrolling
+            # Scroll back to top and re-scrape to catch posts added during the scrape
+            print("   Scrolling back to top for final sweep...")
+            try:
+                page.keyboard.press("Home")
+                time.sleep(3)
+                page.keyboard.press("Home")
+                time.sleep(3)
+                # Collect any new responses from the top
+                new_top = response_bodies[prev_bodies:]
+                prev_bodies = len(response_bodies)
+                for body in new_top:
+                    process_raw_data(body)
+            except:
+                pass
+
+            # Final HTML parse
             try:
                 final_html = page.content()
                 final_new = process_raw_data(final_html)
                 if final_new:
-                    print(f"   Final HTML pass: +{final_new} posts")
+                    print(f"   Final sweep: +{final_new} new posts")
             except:
                 pass
 
+            report_progress("saving", f"Saving {len(captured)} posts...", captured=len(captured))
             print(f"   Browser done. Captured: {len(captured)}")
             try: browser.close()
             except: pass

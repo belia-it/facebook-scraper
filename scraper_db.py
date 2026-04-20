@@ -194,7 +194,9 @@ EXCLUDED_TYPENAMES = {
 }
 TIME_FIELDS = {
     "creation_time", "timestamp", "publish_time", "created_time",
-    "publish_timestamp", "created_timestamp"
+    "publish_timestamp", "created_timestamp",
+    "updated_time", "update_time", "last_edit_time", "edit_time",
+    "bumped_time", "last_modified_time", "modified_time",
 }
 
 
@@ -619,18 +621,23 @@ def main():
                 if not msg:
                     msg = "[Media post - no text]"
 
+                # Collect ALL timestamp values in this story and use the LATEST one.
+                # Posts edited/bumped get a recent update_time even though creation_time is old.
                 creation_time = None
+                all_times = []
                 for tf in TIME_FIELDS:
                     val = find_numeric_time(s, tf)
-                    if val is not None:
-                        creation_time = val
-                        break
+                    if val is not None and 1000000000 < val < 9999999999:  # sane unix ts range
+                        all_times.append(val)
+                if all_times:
+                    creation_time = max(all_times)
 
+                # Skip posts with no extractable timestamp — cannot age-filter them
+                if creation_time is None:
+                    continue
                 post_date, post_time, _ = parse_facebook_date(creation_time, ref_time)
-                if not post_date:
-                    post_date = ref_time.strftime('%Y-%m-%d')
-                if not post_time:
-                    post_time = ref_time.strftime('%H:%M:%S')
+                if not post_date or not post_time:
+                    continue
 
                 url = f"https://www.facebook.com/{post_id}"
                 meta_url = find_key_recursive(s, "url")

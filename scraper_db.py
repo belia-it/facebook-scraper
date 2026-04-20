@@ -38,7 +38,7 @@ load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
 GROUP_URL = os.getenv("GROUP_URL", "https://www.facebook.com/groups/covsousse?sorting_setting=CHRONOLOGICAL")
 STORAGE_STATE = os.getenv("STORAGE_STATE", os.path.join(SCRIPT_DIR, "facebook_auth.json"))
 TIMEZONE_OFFSET = int(os.getenv("TIMEZONE_OFFSET", "1"))
-MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "35"))
+MAX_SCROLLS = int(os.getenv("MAX_SCROLLS", "200"))  # safety cap; adaptive logic stops earlier
 AGE_LIMIT_MINUTES = int(os.getenv("AGE_LIMIT_MINUTES", "59"))
 
 # Extract group identifier for filtering (e.g., "covsousse" or numeric ID)
@@ -841,8 +841,27 @@ def main():
             # 3. Scroll to trigger more content
             print("   Scrolling for more...")
 
+            # Helper: compute age of oldest captured post in minutes
+            def oldest_age_min():
+                oldest = None
+                for row in captured.values():
+                    p_date, p_time = row.get('post_date'), row.get('post_time')
+                    if not (p_date and p_time):
+                        continue
+                    try:
+                        fmt = '%Y-%m-%d %H:%M:%S' if len(p_time) > 5 else '%Y-%m-%d %H:%M'
+                        p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", fmt)
+                        if oldest is None or p_dt < oldest:
+                            oldest = p_dt
+                    except:
+                        pass
+                if oldest is None:
+                    return 0
+                return (ref_time - oldest).total_seconds() / 60
+
             prev_bodies = len(response_bodies)
             stall = 0
+            window_covered = False
             for i in range(MAX_SCROLLS):
                 prev_count = len(captured)
                 try:
@@ -860,10 +879,25 @@ def main():
                     print(f"   Scroll error: {e}")
                     break
 
+                # ── Window-aware stop: once we have posts older than AGE_LIMIT_MINUTES,
+                # we have covered the full window and can stop scrolling.
+                age_min = oldest_age_min()
+                if age_min > AGE_LIMIT_MINUTES:
+                    # Scroll a few more to catch stragglers, then stop
+                    if not window_covered:
+                        window_covered = True
+                        print(f"   Window covered (oldest: {age_min:.0f} min, limit: {AGE_LIMIT_MINUTES}). 3 more scrolls for safety.")
+                        remaining_safety_scrolls = 3
+                    else:
+                        remaining_safety_scrolls -= 1
+                        if remaining_safety_scrolls <= 0:
+                            print(f"   Window fully covered. Total: {len(captured)} (oldest {age_min:.0f} min old).")
+                            break
+
                 if len(captured) == prev_count:
                     stall += 1
                     if stall >= 5:
-                        print(f"   Feed exhausted. Total: {len(captured)}")
+                        print(f"   Feed exhausted at scroll {i+1}. Total: {len(captured)}.")
                         break
                     # Try harder during stall
                     try:
@@ -872,7 +906,6 @@ def main():
                         time.sleep(2)
                         page.keyboard.press("PageDown")
                         time.sleep(2)
-                        # Re-process any new responses
                         new_bodies = response_bodies[prev_bodies:]
                         prev_bodies = len(response_bodies)
                         for body in new_bodies:
@@ -884,7 +917,7 @@ def main():
 
                 if i % 3 == 0:
                     report_progress("scrolling", f"Scroll {i+1}/{MAX_SCROLLS}", captured=len(captured), saved=saved_count[0], scroll=i+1, max_scroll=MAX_SCROLLS)
-                    print(f"   Scroll {i+1}/{MAX_SCROLLS} | Posts: {len(captured)}")
+                    print(f"   Scroll {i+1}/{MAX_SCROLLS} | Posts: {len(captured)} | Oldest: {age_min:.0f}m")
                 # Incremental save every 5 scrolls
                 if i > 0 and i % 5 == 0:
                     for pid, row in captured.items():

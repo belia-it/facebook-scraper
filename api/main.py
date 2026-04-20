@@ -298,6 +298,188 @@ async def auth_set_cookies(
     return {"status": "ok", "message": f"Cookies updated ({len(data['cookies'])} total)"}
 
 
+
+
+@app.post("/api/auth/import-browser")
+async def auth_import_browser(browser: str = Form("auto")):
+    """
+    Read Facebook cookies directly from the user's installed browser.
+    No copy/paste, no login prompts — uses browser_cookie3 to access the local cookie store.
+    browser: one of auto, chrome, safari, firefox, edge, brave, opera, chromium, arc
+    """
+    try:
+        import browser_cookie3 as bc3
+    except ImportError:
+        raise HTTPException(status_code=500, detail="browser_cookie3 not installed. Run: pip install browser_cookie3")
+
+    backends = {
+        "chrome": bc3.chrome, "safari": bc3.safari, "firefox": bc3.firefox,
+        "edge": bc3.edge, "brave": bc3.brave, "opera": bc3.opera,
+        "chromium": bc3.chromium,
+    }
+    if hasattr(bc3, "arc"):
+        backends["arc"] = bc3.arc
+    if hasattr(bc3, "opera_gx"):
+        backends["opera_gx"] = bc3.opera_gx
+
+    tried = []
+    cookies = None
+    source = None
+
+    if browser == "auto":
+        # Try each backend in order of likelihood on macOS
+        order = ["chrome", "safari", "arc", "brave", "edge", "firefox", "opera", "opera_gx", "chromium"]
+    else:
+        if browser not in backends:
+            raise HTTPException(status_code=400, detail=f"Unknown browser: {browser}. Try: {', '.join(backends.keys())}")
+        order = [browser]
+
+    for name in order:
+        if name not in backends:
+            continue
+        try:
+            jar = backends[name](domain_name="facebook.com")
+            found = list(jar)
+            tried.append({"browser": name, "count": len(found)})
+            if len(found) > 0:
+                # Check for critical cookies
+                names = {c.name for c in found}
+                if "c_user" in names and "xs" in names:
+                    cookies = found
+                    source = name
+                    break
+        except Exception as e:
+            tried.append({"browser": name, "error": str(e)[:80]})
+
+    if not cookies:
+        msg_parts = []
+        for t in tried:
+            if "error" in t:
+                msg_parts.append(f"{t['browser']}: {t['error']}")
+            else:
+                msg_parts.append(f"{t['browser']}: {t['count']} cookies")
+        raise HTTPException(status_code=404,
+            detail=f"Could not find Facebook cookies (c_user+xs) in any browser. Tried: {'; '.join(msg_parts)}. "
+                   f"Make sure you are logged into facebook.com in at least one browser.")
+
+    # Build Playwright-compatible storage_state
+    playwright_cookies = []
+    for c in cookies:
+        # Map cookielib Cookie to Playwright cookie format
+        same_site = "None"
+        secure = bool(c.secure)
+        http_only = bool(getattr(c, "_rest", {}).get("HttpOnly") or getattr(c, "has_nonstandard_attr", lambda x: False)("HttpOnly"))
+        pw_cookie = {
+            "name": c.name,
+            "value": c.value,
+            "domain": c.domain if c.domain.startswith(".") else f".{c.domain}" if "facebook.com" in c.domain else c.domain,
+            "path": c.path or "/",
+            "httpOnly": http_only,
+            "secure": secure,
+            "sameSite": same_site,
+        }
+        if c.expires:
+            pw_cookie["expires"] = float(c.expires)
+        playwright_cookies.append(pw_cookie)
+
+    # Load existing auth or create new
+    data = {"cookies": [], "origins": []}
+    if os.path.exists(AUTH_FILE):
+        try:
+            with open(AUTH_FILE) as f:
+                data = _json.load(f)
+        except:
+            pass
+
+    # Merge: replace cookies with same name, add new ones
+    by_name = {c.get("name"): i for i, c in enumerate(data.get("cookies", []))}
+    for pc in playwright_cookies:
+        if pc["name"] in by_name:
+            data["cookies"][by_name[pc["name"]]] = pc
+        else:
+            data["cookies"].append(pc)
+
+    with open(AUTH_FILE, 'w') as f:
+        _json.dump(data, f, indent=2)
+
+    saved_names = sorted({c["name"] for c in playwright_cookies})
+    return {
+        "status": "ok",
+        "source": source,
+        "message": f"Imported {len(playwright_cookies)} cookies from {source}",
+        "saved_names": saved_names,
+        "tried": tried,
+    }
+
+
+
+# In-process state for login popup
+_login_state = {"running": False, "success": False, "error": None, "started_at": None}
+_login_process = None
+
+
+@app.post("/api/auth/login")
+async def auth_login(background_tasks: BackgroundTasks):
+    """Launch a visible Chromium window on facebook.com so the user can log in once.
+    When the feed loads, cookies are captured and saved automatically."""
+    global _login_state, _login_process
+
+    if _login_state.get("running"):
+        return {"status": "already_running", "message": "Login window is already open."}
+
+    helper_script = os.path.join(ROOT_DIR, "login_popup_helper.py")
+    if not os.path.exists(helper_script):
+        raise HTTPException(status_code=500, detail=f"Helper script missing: {helper_script}")
+
+    _login_state = {"running": True, "success": False, "error": None, "started_at": _dt.now().isoformat()}
+
+    def run_helper():
+        global _login_process, _login_state
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, helper_script],
+                cwd=ROOT_DIR,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            _login_process = proc
+            out, _ = proc.communicate(timeout=600)  # 10 min max for user to log in
+            if proc.returncode == 0 and "LOGIN_SUCCESS" in (out or ""):
+                _login_state["success"] = True
+            else:
+                _login_state["error"] = (out or "").strip()[-500:] or f"Exit code {proc.returncode}"
+        except subprocess.TimeoutExpired:
+            if _login_process:
+                _login_process.kill()
+            _login_state["error"] = "Login window timed out (10 min)"
+        except Exception as e:
+            _login_state["error"] = str(e)
+        finally:
+            _login_state["running"] = False
+            _login_process = None
+
+    background_tasks.add_task(run_helper)
+    return {"status": "started", "message": "A browser window will open in a moment. Log in to Facebook there, then come back here."}
+
+
+@app.get("/api/auth/login/status")
+async def auth_login_status():
+    """Poll the login popup status."""
+    return dict(_login_state)
+
+
+@app.post("/api/auth/login/cancel")
+async def auth_login_cancel():
+    """Kill the login popup if it is still open."""
+    global _login_process, _login_state
+    if _login_process:
+        try:
+            _login_process.kill()
+        except: pass
+    _login_state["running"] = False
+    return {"status": "cancelled"}
+
 @app.delete("/api/auth")
 async def auth_clear():
     """Delete the auth file."""

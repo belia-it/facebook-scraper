@@ -510,25 +510,49 @@
           <span id="upload-result" style="margin-left:12px;font-size:0.78rem;color:rgba(255,255,255,0.5)"></span>
         </div>
 
-        <!-- Manual Cookie Entry -->
-        <div class="glass-panel" style="padding:20px;margin-bottom:20px">
-          <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:12px;color:rgba(255,255,255,0.7)">Manual Cookie Entry</h3>
-          <p style="font-size:0.78rem;color:rgba(255,255,255,0.4);margin-bottom:14px">Paste cookie values from your browser. Only <strong>c_user</strong> and <strong>xs</strong> are required.</p>
-          <div style="display:grid;grid-template-columns:100px 1fr;gap:8px 12px;align-items:center;margin-bottom:14px">
-            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">c_user *</label>
-            <input type="text" id="cookie-c_user" placeholder="Your Facebook user ID" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-family:monospace">
-            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">xs *</label>
-            <input type="text" id="cookie-xs" placeholder="Session token" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-family:monospace">
-            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">datr</label>
-            <input type="text" id="cookie-datr" placeholder="Optional" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-family:monospace">
-            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">sb</label>
-            <input type="text" id="cookie-sb" placeholder="Optional" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-family:monospace">
-            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">fr</label>
-            <input type="text" id="cookie-fr" placeholder="Optional" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;font-family:monospace">
+        <!-- One-Click Login (primary) -->
+        <div class="glass-panel" style="padding:22px;margin-bottom:20px;border:1px solid rgba(139,92,246,0.3)">
+          <h3 style="font-size:1rem;font-weight:700;margin-bottom:10px;color:#fff">&#x1F511; One-Click Login</h3>
+          <p style="font-size:0.82rem;color:rgba(255,255,255,0.65);margin-bottom:16px;line-height:1.55">
+            Click once. A browser window opens on Facebook &mdash; log in there (first time only). The app detects success automatically and saves your session. <strong>No copy-paste, no DevTools.</strong>
+          </p>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <button class="btn-primary" onclick="startLoginPopup()" id="login-popup-btn" style="font-size:0.9rem;padding:11px 22px;font-weight:600">
+              &#x1F680; Open Login Window
+            </button>
+            <button class="btn-ghost" onclick="cancelLoginPopup()" id="login-cancel-btn" style="font-size:0.82rem;padding:11px 16px;display:none">
+              Cancel
+            </button>
+            <span id="login-popup-status" style="font-size:0.82rem;color:rgba(255,255,255,0.55)"></span>
           </div>
-          <button class="btn-primary" onclick="saveCookies()" style="font-size:0.82rem;padding:8px 16px">Save Cookies</button>
-          <span id="cookie-result" style="margin-left:12px;font-size:0.78rem;color:rgba(255,255,255,0.5)"></span>
         </div>
+
+        <!-- Advanced: Import from installed browser -->
+        <details class="glass-panel" style="padding:16px 20px;margin-bottom:20px">
+          <summary style="font-size:0.82rem;font-weight:600;color:rgba(255,255,255,0.55);cursor:pointer;user-select:none">&#x1F50C; Advanced: import cookies from installed browser</summary>
+          <div style="padding-top:14px">
+            <p style="font-size:0.76rem;color:rgba(255,255,255,0.45);margin-bottom:14px;line-height:1.55">
+              Reads cookies directly from Chrome/Safari/etc. May fail on macOS due to keychain / FullDiskAccess restrictions.
+            </p>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <select id="import-browser-select" style="font-size:0.82rem;padding:9px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff">
+                <option value="auto">Auto-detect</option>
+                <option value="chrome">Chrome</option>
+                <option value="safari">Safari</option>
+                <option value="arc">Arc</option>
+                <option value="brave">Brave</option>
+                <option value="edge">Edge</option>
+                <option value="firefox">Firefox</option>
+                <option value="opera">Opera</option>
+                <option value="chromium">Chromium</option>
+              </select>
+              <button class="btn-primary" onclick="importFromBrowser()" id="import-btn" style="font-size:0.85rem;padding:9px 18px;font-weight:600">
+                &#x2193; Import Facebook Cookies
+              </button>
+              <span id="import-result" style="font-size:0.78rem;color:rgba(255,255,255,0.55)"></span>
+            </div>
+          </div>
+        </details>
 
         <!-- Danger Zone -->
         <div class="glass-panel" style="padding:20px;border-color:rgba(239,68,68,0.2)">
@@ -1284,6 +1308,100 @@
         result.style.color = '#f87171';
       }
       input.value = '';
+    }
+
+    // One-click login popup
+    let _loginPollTimer = null;
+
+    async function startLoginPopup() {
+      const btn = document.getElementById('login-popup-btn');
+      const cancelBtn = document.getElementById('login-cancel-btn');
+      const status = document.getElementById('login-popup-status');
+      btn.disabled = true;
+      cancelBtn.style.display = 'inline-block';
+      status.textContent = 'Launching browser window...';
+      status.style.color = 'rgba(255,255,255,0.7)';
+
+      try {
+        const res = await fetch('/api/auth/login', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Failed to launch');
+        if (data.status === 'already_running') {
+          status.textContent = data.message;
+          status.style.color = '#fbbf24';
+        } else {
+          status.textContent = 'Browser window opened. Log in to Facebook there...';
+        }
+      } catch (e) {
+        status.textContent = '\u2717 ' + e.message;
+        status.style.color = '#f87171';
+        btn.disabled = false;
+        cancelBtn.style.display = 'none';
+        return;
+      }
+
+      if (_loginPollTimer) clearInterval(_loginPollTimer);
+      _loginPollTimer = setInterval(async () => {
+        try {
+          const r = await fetch('/api/auth/login/status');
+          const s = await r.json();
+          if (!s.running) {
+            clearInterval(_loginPollTimer); _loginPollTimer = null;
+            btn.disabled = false;
+            cancelBtn.style.display = 'none';
+            if (s.success) {
+              status.innerHTML = '\u2713 Session captured successfully';
+              status.style.color = '#34d399';
+              loadAuthStatus();
+            } else {
+              status.innerHTML = '\u2717 ' + (s.error || 'Cancelled');
+              status.style.color = '#f87171';
+            }
+          } else {
+            const elapsed = Math.round((Date.now() - new Date(s.started_at).getTime()) / 1000);
+            status.textContent = 'Waiting for login... (' + elapsed + 's)';
+          }
+        } catch(e) {}
+      }, 2500);
+    }
+
+    async function cancelLoginPopup() {
+      try { await fetch('/api/auth/login/cancel', { method: 'POST' }); } catch(e) {}
+      if (_loginPollTimer) { clearInterval(_loginPollTimer); _loginPollTimer = null; }
+      document.getElementById('login-popup-btn').disabled = false;
+      document.getElementById('login-cancel-btn').style.display = 'none';
+      document.getElementById('login-popup-status').textContent = 'Cancelled.';
+    }
+
+    async function importFromBrowser() {
+      const btn = document.getElementById('import-btn');
+      const sel = document.getElementById('import-browser-select');
+      const result = document.getElementById('import-result');
+      btn.disabled = true;
+      result.textContent = 'Reading cookies from browser...';
+      result.style.color = 'rgba(255,255,255,0.55)';
+      try {
+        const fd = new FormData();
+        fd.append('browser', sel.value);
+        const res = await fetch('/api/auth/import-browser', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (res.ok) {
+          result.innerHTML = '\u2713 ' + data.message + ' <span style="color:rgba(255,255,255,0.4)">('
+                           + (data.saved_names || []).slice(0,6).join(', ')
+                           + (data.saved_names && data.saved_names.length>6 ? ', +' + (data.saved_names.length-6) + ' more' : '')
+                           + ')</span>';
+          result.style.color = '#34d399';
+          loadAuthStatus();
+        } else {
+          result.innerHTML = '\u2717 ' + (data.detail || 'Import failed');
+          result.style.color = '#f87171';
+        }
+      } catch(e) {
+        result.textContent = '\u2717 ' + (e.message || 'Import failed');
+        result.style.color = '#f87171';
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     async function saveCookies() {

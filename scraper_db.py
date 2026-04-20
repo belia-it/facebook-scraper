@@ -614,12 +614,10 @@ def main():
                 msg = find_actual_message(s)
                 user = find_actual_user(s)
 
-                # Skip lightweight story references (no text AND no named author)
-                # These are partial objects Facebook includes alongside full stories
-                if not msg and user == "Unknown User":
-                    continue
+                # Skip posts without real text content — carpooling posts always have text.
+                # Media-only posts (photos/videos with no caption) are not useful for this use case.
                 if not msg:
-                    msg = "[Media post - no text]"
+                    continue
 
                 # Collect ALL timestamp values in this story and use the LATEST one.
                 # Posts edited/bumped get a recent update_time even though creation_time is old.

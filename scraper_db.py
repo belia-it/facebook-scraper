@@ -589,6 +589,11 @@ def main():
 
     captured = {}
     saved_count = [0]  # mutable counter for incremental saves
+    skip_reasons = {
+        "no_post_id": 0, "dup_pid": 0, "base64_skip": 0,
+        "no_text": 0, "no_timestamp": 0, "not_group": 0,
+        "dup_unknown_twin": 0, "date_parse_failed": 0,
+    }
 
     def process_raw_data(raw_text):
         """Extract posts from raw text (HTML or JSON)."""
@@ -597,9 +602,11 @@ def main():
             for s in find_stories(block):
                 post_id = s.get("post_id") or s.get("id")
                 if not post_id:
+                    skip_reasons["no_post_id"] += 1
                     continue
                 pid_str = str(post_id)
                 if pid_str in captured:
+                    skip_reasons["dup_pid"] += 1
                     continue
 
                 if not pid_str.isdigit():
@@ -607,6 +614,7 @@ def main():
                         import base64
                         decoded = base64.b64decode(pid_str + "==").decode("utf-8", errors="ignore")
                         if any(decoded.startswith(p) for p in ("comment", "notification", "feedback", "reaction", "share")):
+                            skip_reasons["base64_skip"] += 1
                             continue
                     except:
                         pass
@@ -617,6 +625,7 @@ def main():
                 # Skip posts without real text content — carpooling posts always have text.
                 # Media-only posts (photos/videos with no caption) are not useful for this use case.
                 if not msg:
+                    skip_reasons["no_text"] += 1
                     continue
 
                 # Collect ALL timestamp values in this story and use the LATEST one.
@@ -630,11 +639,39 @@ def main():
                 if all_times:
                     creation_time = max(all_times)
 
-                # Skip posts with no extractable timestamp — cannot age-filter them
+                # No numeric timestamp? Try to find a relative time string ("5 min", "2 h", ...)
+                # in the story before giving up.
                 if creation_time is None:
+                    def _find_reltime(obj, depth=0):
+                        if depth > 6: return None
+                        if isinstance(obj, str):
+                            s_ = obj.lower().strip()
+                            if s_ and len(s_) < 40 and re.search(r"\b\d+\s*(min|mins?|h|heures?|jours?|j|days?|d|sec|seconds?|maintenant|now|just|hier|yesterday)\b", s_):
+                                return obj
+                        elif isinstance(obj, dict):
+                            for v in obj.values():
+                                r = _find_reltime(v, depth+1)
+                                if r: return r
+                        elif isinstance(obj, list):
+                            for v in obj:
+                                r = _find_reltime(v, depth+1)
+                                if r: return r
+                        return None
+                    rel_str = _find_reltime(s)
+                    if rel_str:
+                        post_date, post_time, _ = parse_facebook_date(rel_str, ref_time)
+                        if post_date and post_time:
+                            # Reconstruct as a unix-style timestamp path: we already have post_date/time
+                            creation_time = rel_str  # marker so we skip numeric parse below
+                if creation_time is None:
+                    skip_reasons["no_timestamp"] += 1
                     continue
-                post_date, post_time, _ = parse_facebook_date(creation_time, ref_time)
+
+                if isinstance(creation_time, (int, float)):
+                    post_date, post_time, _ = parse_facebook_date(creation_time, ref_time)
+                # else: already parsed above from rel_str
                 if not post_date or not post_time:
+                    skip_reasons["date_parse_failed"] += 1
                     continue
 
                 url = f"https://www.facebook.com/{post_id}"
@@ -657,6 +694,7 @@ def main():
                                     found_group_url = True
                                     break
                         if not found_group_url:
+                            skip_reasons["not_group"] += 1
                             continue
 
                 if pid_str not in existing and url not in existing:
@@ -671,6 +709,7 @@ def main():
                             for r in captured.values()
                         )
                         if has_named:
+                            skip_reasons["dup_unknown_twin"] += 1
                             continue
 
                     # Build metadata JSON from story object (truncate large fields)
@@ -1038,6 +1077,8 @@ def main():
     conn.commit()
     conn.close()
     report_progress("done", f"Saved {saved} new posts", captured=len(captured), saved=saved)
+    # Print skip diagnostics
+    print(f"Skip reasons: {skip_reasons}")
     print(f"✅ Done. Saved {saved} new posts.")
 
     # Log job result
@@ -1054,7 +1095,8 @@ def main():
                 captured=len(captured),
                 saved=saved,
                 skipped_age=skipped_age,
-                duration_sec=round(duration, 1)
+                duration_sec=round(duration, 1),
+                error=f"skip_reasons={skip_reasons}"
             )
         except Exception as e:
             print(f"   Job log error: {e}")

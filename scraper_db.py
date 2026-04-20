@@ -626,6 +626,18 @@ def main():
                 # Media-only posts (photos/videos with no caption) are not useful for this use case.
                 if not msg:
                     skip_reasons["no_text"] += 1
+                    # Save first 3 samples for inspection
+                    if skip_reasons["no_text"] <= 3:
+                        try:
+                            import os as _os, json as _j
+                            sample_path = "/tmp/no_text_sample_" + str(skip_reasons["no_text"]) + ".json"
+                            if not _os.path.exists(sample_path):
+                                with open(sample_path, "w") as _f:
+                                    # Save a trimmed version — don't dump massive comet_sections
+                                    trimmed = {k: v for k, v in s.items() if k not in ("comet_sections", "feedback")}
+                                    trimmed["_top_level_keys"] = list(s.keys())
+                                    _j.dump(trimmed, _f, indent=2, ensure_ascii=False, default=str)
+                        except: pass
                     continue
 
                 # Collect ALL timestamp values in this story and use the LATEST one.
@@ -878,9 +890,15 @@ def main():
             # 3. Scroll to trigger more content
             print("   Scrolling for more...")
 
-            # Helper: compute age of oldest captured post in minutes
-            def oldest_age_min():
-                oldest = None
+            # Helper: age (minutes) of the N-th oldest captured post, ignoring pinned/outlier posts.
+            # Pinned posts (welcome messages) sit at the top with ancient timestamps. Using the
+            # single oldest would make us stop too early. Instead, require at least N "normal" posts
+            # to be older than the window before declaring it covered.
+            def age_to_cover_window():
+                # Return True if at least 3 normal (non-pinned) posts are older than AGE_LIMIT_MINUTES.
+                # A "normal" post has age < 7 days (anything older is pinned/archival).
+                SEVEN_DAYS_MIN = 7 * 24 * 60
+                ages = []
                 for row in captured.values():
                     p_date, p_time = row.get('post_date'), row.get('post_time')
                     if not (p_date and p_time):
@@ -888,17 +906,87 @@ def main():
                     try:
                         fmt = '%Y-%m-%d %H:%M:%S' if len(p_time) > 5 else '%Y-%m-%d %H:%M'
                         p_dt = datetime.datetime.strptime(f"{p_date} {p_time}", fmt)
-                        if oldest is None or p_dt < oldest:
-                            oldest = p_dt
+                        age = (ref_time - p_dt).total_seconds() / 60
+                        # Ignore pinned/archival outliers
+                        if age < SEVEN_DAYS_MIN:
+                            ages.append(age)
                     except:
                         pass
-                if oldest is None:
-                    return 0
-                return (ref_time - oldest).total_seconds() / 60
+                if not ages:
+                    return 0, False
+                ages.sort()
+                # "Covered" = at least 5 non-pinned posts older than the window
+                old_count = sum(1 for a in ages if a > AGE_LIMIT_MINUTES)
+                covered = old_count >= 5
+                oldest_nonpinned = ages[-1]
+                return oldest_nonpinned, covered
+
+            def oldest_age_min():
+                # For display only — age of oldest non-pinned post.
+                age, _ = age_to_cover_window()
+                return age
 
             prev_bodies = len(response_bodies)
             stall = 0
             window_covered = False
+            dom_raw = {}  # url -> {author, text, timeText} collected across scroll positions
+
+            # Inline JS that pulls visible feed posts from the DOM. Called during scrolling so
+            # we capture posts that Facebook's virtualisation would otherwise drop from the tree.
+            DOM_EXTRACT_JS = r"""() => {
+                const feed = document.querySelector('[role="feed"]');
+                if (!feed) return [];
+                const out = [];
+                for (const item of feed.children) {
+                    try {
+                        let author = '';
+                        const ah = item.querySelector('h2 a, h3 a, strong a, [data-ad-rendering-role="profile_name"] a');
+                        if (ah) author = ah.textContent.trim();
+                        if (!author || author === 'Nouvelles publications' || author === 'Recent posts') continue;
+
+                        let text = '', tlen = 0;
+                        item.querySelectorAll('[dir="auto"]').forEach(el => {
+                            const t = el.textContent.trim();
+                            if (t.length > tlen && t.length > 5) { tlen = t.length; text = t; }
+                        });
+                        if (!text) continue;
+
+                        let timeText = '';
+                        item.querySelectorAll('a[href*="/posts/"], a[href*="/permalink/"], a[href*="/p/"]').forEach(a => {
+                            if (timeText) return;
+                            const t = a.textContent.trim();
+                            if (t && t.length < 30) timeText = t;
+                        });
+
+                        let url = '';
+                        for (const a of item.querySelectorAll('a[href]')) {
+                            const href = a.getAttribute('href') || '';
+                            const full = href.startsWith('http') ? href : 'https://www.facebook.com' + href;
+                            if ((href.includes('/posts/') || href.includes('/permalink/') || href.includes('/p/')) &&
+                                (full.includes('/groups/') || href.includes('/groups/'))) {
+                                url = full.split('?')[0];
+                                break;
+                            }
+                        }
+                        if (!url) continue;
+                        out.push({ author, text, url, timeText });
+                    } catch(e) {}
+                }
+                return out;
+            }"""
+
+            def capture_visible_dom():
+                try:
+                    posts = page.evaluate(DOM_EXTRACT_JS)
+                except Exception as e:
+                    return 0
+                added = 0
+                for p_ in posts or []:
+                    u = p_.get("url")
+                    if u and u not in dom_raw:
+                        dom_raw[u] = p_
+                        added += 1
+                return added
             for i in range(MAX_SCROLLS):
                 prev_count = len(captured)
                 try:
@@ -912,19 +1000,25 @@ def main():
                     prev_bodies = len(response_bodies)
                     for body in new_bodies:
                         process_raw_data(body)
+
+                    # Extract whatever is visible in the DOM right now
+                    before_dom = len(dom_raw)
+                    capture_visible_dom()
+                    dom_delta = len(dom_raw) - before_dom
+                    if dom_delta:
+                        print(f"   [DOM]  +{dom_delta} new (total in DOM buffer: {len(dom_raw)})")
                 except Exception as e:
                     print(f"   Scroll error: {e}")
                     break
 
-                # ── Window-aware stop: once we have posts older than AGE_LIMIT_MINUTES,
-                # we have covered the full window and can stop scrolling.
-                age_min = oldest_age_min()
-                if age_min > AGE_LIMIT_MINUTES:
-                    # Scroll a few more to catch stragglers, then stop
+                # ── Window-aware stop: require at least 3 NON-PINNED posts older than AGE_LIMIT_MINUTES
+                # (one pinned welcome post at the top is not enough to stop scrolling).
+                age_min, covered = age_to_cover_window()
+                if covered:
                     if not window_covered:
                         window_covered = True
-                        print(f"   Window covered (oldest: {age_min:.0f} min, limit: {AGE_LIMIT_MINUTES}). 3 more scrolls for safety.")
-                        remaining_safety_scrolls = 3
+                        print(f"   Window covered (oldest non-pinned: {age_min:.0f} min, limit: {AGE_LIMIT_MINUTES}). 15 more scrolls for DOM accumulation.")
+                        remaining_safety_scrolls = 15
                     else:
                         remaining_safety_scrolls -= 1
                         if remaining_safety_scrolls <= 0:
@@ -1005,6 +1099,84 @@ def main():
                     print(f"   Final sweep: +{final_new} new posts")
             except:
                 pass
+
+            # ── Merge accumulated DOM-visible posts into captured ─────────────
+            # dom_raw was populated during scrolling via capture_visible_dom().
+            # For each DOM post not already in captured (via post_id / URL / text-match),
+            # parse its relative time ("2 h", "45 min") and save.
+            try:
+                dom_posts = list(dom_raw.values())
+                print(f"   DOM sweep: merging {len(dom_posts)} visible-DOM posts into captured")
+                dom_added = 0
+                dom_skipped_no_time = 0
+                dom_skipped_dup = 0
+                for dp in dom_posts:
+                    post_url = dp.get("url", "")
+                    if not post_url: continue
+                    # Normalize
+                    if GROUP_SLUG and f"/groups/{GROUP_SLUG.lower()}" not in post_url.lower():
+                        continue
+
+                    # Dedup: already captured by URL?
+                    pid = extract_post_id(post_url)
+                    already = False
+                    if pid:
+                        if pid in captured:
+                            already = True
+                        else:
+                            for row in captured.values():
+                                rpid = extract_post_id(row.get("post_url", ""))
+                                if rpid and rpid == pid:
+                                    already = True; break
+                    if already:
+                        dom_skipped_dup += 1
+                        continue
+
+                    # Also dedup by (author, text-normalized) to avoid saving same content twice
+                    author = dp.get("author", "")
+                    text = dp.get("text", "")
+                    if not text: continue
+                    norm_text = re.sub(r"\s+", "", text.lower())[:80]
+                    text_dup = False
+                    for row in captured.values():
+                        if row.get("profile_name") == author:
+                            rnorm = re.sub(r"\s+", "", (row.get("post_text") or "").lower())[:80]
+                            if rnorm == norm_text:
+                                text_dup = True; break
+                    if text_dup:
+                        dom_skipped_dup += 1
+                        continue
+
+                    # Parse time from DOM text (e.g., "2 h", "45 min", "hier")
+                    time_text = dp.get("timeText", "")
+                    pd, pt, _ = parse_facebook_date(time_text or "", ref_time)
+                    if not pd or not pt:
+                        dom_skipped_no_time += 1
+                        continue
+
+                    # Build row
+                    key = pid or f"DOM_{len(captured)}_{hash(post_url)}"
+                    row = {
+                        "post_url": post_url,
+                        "post_time": pt,
+                        "post_date": pd,
+                        "calendar_week": str(datetime.datetime.strptime(pd, "%Y-%m-%d").isocalendar()[1]),
+                        "weekday": datetime.datetime.strptime(pd, "%Y-%m-%d").strftime("%A"),
+                        "profile_name": author or "Unknown User",
+                        "post_text": text,
+                        "scrape_timestamp": ref_time.isoformat(),
+                        "metadata": None,
+                        "job_id": job_id,
+                        "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    }
+                    captured[key] = row
+                    dom_added += 1
+                    print(f"   [DOM] + {author[:25]} | {pd} {pt} | {text[:40]}")
+
+                if dom_added or dom_skipped_no_time or dom_skipped_dup:
+                    print(f"   DOM sweep: +{dom_added} new, {dom_skipped_dup} dups, {dom_skipped_no_time} no-time")
+            except Exception as _dom_err:
+                print(f"   [DOM sweep error] {_dom_err}")
 
             report_progress("saving", f"Saving {len(captured)} posts...", captured=len(captured))
             print(f"   Browser done. Captured: {len(captured)}")

@@ -913,17 +913,18 @@ def main():
                     except:
                         pass
                 if not ages:
-                    return 0, False
+                    return 0, False, 0
                 ages.sort()
-                # "Covered" = at least 5 non-pinned posts older than the window
+                # Soft coverage: 5 old posts — start safety countdown
+                # Hard coverage: 20 old posts — stop now (we have ample buffer past the window)
                 old_count = sum(1 for a in ages if a > AGE_LIMIT_MINUTES)
                 covered = old_count >= 5
                 oldest_nonpinned = ages[-1]
-                return oldest_nonpinned, covered
+                return oldest_nonpinned, covered, old_count
 
             def oldest_age_min():
                 # For display only — age of oldest non-pinned post.
-                age, _ = age_to_cover_window()
+                age, _, _ = age_to_cover_window()
                 return age
 
             prev_bodies = len(response_bodies)
@@ -1011,13 +1012,19 @@ def main():
                     print(f"   Scroll error: {e}")
                     break
 
-                # Log when the window is first fully covered — but keep scrolling until stall.
-                # Stopping early on window coverage misses posts that virtualisation only exposes
-                # deeper in the feed (confirmed by diffing against an independent DOM scraper).
-                age_min, covered = age_to_cover_window()
+                # Smart stop: we have a strong signal when the buffer of "old" posts grows.
+                # Soft (5 old) = window reached; Hard (20 old) = definitely past the window, stop.
+                age_min, covered, old_count = age_to_cover_window()
                 if covered and not window_covered:
                     window_covered = True
-                    print(f"   Window reached (oldest non-pinned: {age_min:.0f} min). Continuing to scroll until feed stalls.")
+                    print(f"   Window reached (oldest: {age_min:.0f}m, {old_count} old posts). Continuing for safety...")
+                # Hard stop: require 60 non-pinned posts older than window.
+                # This ensures we've scrolled WELL past the window so everything in the
+                # window has been seen (including posts that virtualisation only
+                # exposes deeper in the feed).
+                if old_count >= 60:
+                    print(f"   Hard stop: {old_count} posts older than window, {len(captured)} total captured.")
+                    break
 
                 if len(captured) == prev_count:
                     stall += 1
@@ -1042,7 +1049,8 @@ def main():
 
                 if i % 3 == 0:
                     report_progress("scrolling", f"Scroll {i+1}/{MAX_SCROLLS}", captured=len(captured), saved=saved_count[0], scroll=i+1, max_scroll=MAX_SCROLLS)
-                    print(f"   Scroll {i+1}/{MAX_SCROLLS} | Posts: {len(captured)} | Oldest: {age_min:.0f}m")
+                    _, _, _oc = age_to_cover_window()
+                    print(f"   Scroll {i+1}/{MAX_SCROLLS} | Posts: {len(captured)} | Oldest: {age_min:.0f}m | Old: {_oc}")
                 # Incremental save every 5 scrolls
                 if i > 0 and i % 5 == 0:
                     for pid, row in captured.items():

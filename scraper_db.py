@@ -1011,19 +1011,13 @@ def main():
                     print(f"   Scroll error: {e}")
                     break
 
-                # ── Window-aware stop: require at least 3 NON-PINNED posts older than AGE_LIMIT_MINUTES
-                # (one pinned welcome post at the top is not enough to stop scrolling).
+                # Log when the window is first fully covered — but keep scrolling until stall.
+                # Stopping early on window coverage misses posts that virtualisation only exposes
+                # deeper in the feed (confirmed by diffing against an independent DOM scraper).
                 age_min, covered = age_to_cover_window()
-                if covered:
-                    if not window_covered:
-                        window_covered = True
-                        print(f"   Window covered (oldest non-pinned: {age_min:.0f} min, limit: {AGE_LIMIT_MINUTES}). 15 more scrolls for DOM accumulation.")
-                        remaining_safety_scrolls = 15
-                    else:
-                        remaining_safety_scrolls -= 1
-                        if remaining_safety_scrolls <= 0:
-                            print(f"   Window fully covered. Total: {len(captured)} (oldest {age_min:.0f} min old).")
-                            break
+                if covered and not window_covered:
+                    window_covered = True
+                    print(f"   Window reached (oldest non-pinned: {age_min:.0f} min). Continuing to scroll until feed stalls.")
 
                 if len(captured) == prev_count:
                     stall += 1

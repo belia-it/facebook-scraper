@@ -96,30 +96,71 @@ async def api_stats():
     return get_stats()
 
 
+# Track scraper subprocess so it can be cancelled from the UI
+_scraper_process = None
+
+
 @app.post("/api/scrape")
 async def api_scrape(background_tasks: BackgroundTasks):
     """
     Trigger scraper_db.py as a background subprocess.
     Returns immediately; scraping happens asynchronously.
     """
+    global _scraper_process
     if not os.path.exists(SCRAPER_DB):
         raise HTTPException(status_code=404, detail="scraper_db.py not found")
 
+    if _scraper_process and _scraper_process.poll() is None:
+        return {"status": "already_running", "message": "Scraper is already running. Stop it first."}
+
     def run_scraper():
+        global _scraper_process
         try:
-            subprocess.run(
+            _scraper_process = subprocess.Popen(
                 [sys.executable, SCRAPER_DB],
                 cwd=ROOT_DIR,
-                timeout=600,      # 10 min max
-                check=True,
             )
-        except subprocess.CalledProcessError as e:
+            try:
+                _scraper_process.wait(timeout=900)  # 15 min max
+            except subprocess.TimeoutExpired:
+                _scraper_process.kill()
+                print("[Scraper] Timed out after 15 minutes.")
+        except Exception as e:
             print(f"[Scraper] Error: {e}")
-        except subprocess.TimeoutExpired:
-            print("[Scraper] Timed out after 10 minutes.")
+        finally:
+            _scraper_process = None
 
     background_tasks.add_task(run_scraper)
     return {"status": "started", "message": "Scraper is running in the background."}
+
+
+@app.post("/api/scrape/cancel")
+async def api_scrape_cancel():
+    """Kill the running scraper subprocess + any child browser/playwright processes."""
+    global _scraper_process
+    if not _scraper_process or _scraper_process.poll() is not None:
+        return {"status": "not_running", "message": "No scraper is running."}
+
+    try:
+        # Kill the scraper process tree (includes playwright driver and chromium)
+        import signal
+        pid = _scraper_process.pid
+        _scraper_process.kill()
+        # Best-effort kill of related children (playwright driver + chromium)
+        try:
+            subprocess.run(["pkill", "-P", str(pid)], timeout=5)
+        except: pass
+        try:
+            subprocess.run(["pkill", "-f", "scraper_db.py"], timeout=5)
+        except: pass
+        # Clean up progress file so the UI knows it stopped
+        progress_file = os.path.join(ROOT_DIR, "api", "_scrape_progress.json")
+        if os.path.exists(progress_file):
+            try: os.remove(progress_file)
+            except: pass
+        return {"status": "cancelled", "message": "Scraper stopped."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @app.delete("/api/posts")

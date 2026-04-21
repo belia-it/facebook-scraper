@@ -346,6 +346,9 @@
         <button id="sync-btn" class="btn-primary" onclick="triggerScrape()">
           <span id="sync-icon">⟳</span> Scrape Now
         </button>
+        <button id="stop-btn" class="btn-ghost" onclick="stopScraper()" style="color:#f87171;border-color:rgba(248,113,113,0.35);display:none">
+          ⏹ Stop Scraper
+        </button>
         <button id="clear-btn" class="btn-ghost" onclick="clearPosts()" style="color:#f87171;border-color:rgba(248,113,113,0.3)">
           🗑 Clear Posts
         </button>
@@ -867,12 +870,43 @@
       if (pct != null) document.getElementById('st-bar').style.width = Math.min(pct, 100) + '%';
     }
 
+    async function stopScraper() {
+      const btn = document.getElementById('stop-btn');
+      btn.disabled = true;
+      btn.textContent = 'Stopping...';
+      try {
+        const res = await fetch('/api/scrape/cancel', { method: 'POST' });
+        const data = await res.json();
+        showToast(data.message || 'Scraper stopped');
+      } catch (e) {
+        showToast('Failed to stop scraper');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '\u23F9 Stop Scraper';
+        btn.style.display = 'none';
+        // Hide toast and reset main scrape button
+        const toast = document.getElementById('scrape-toast');
+        if (toast) {
+          toast.className = 'scrape-toast visible expanded error';
+          if (typeof stUpdate === 'function') stUpdate('Stopped', 'Scraper cancelled by user', 0, 0, null, null, 0, 0);
+          setTimeout(() => toast.classList.remove('visible'), 5000);
+        }
+        document.getElementById('sync-btn').disabled = false;
+        const icon = document.getElementById('sync-icon');
+        if (icon) icon.classList.remove('spinning');
+        if (typeof scrapePolling !== 'undefined' && scrapePolling) {
+          clearInterval(scrapePolling); scrapePolling = null;
+        }
+      }
+    }
+
     async function triggerScrape() {
       const btn = document.getElementById('sync-btn');
       const icon = document.getElementById('sync-icon');
       const toast = document.getElementById('scrape-toast');
       btn.disabled = true;
       icon.classList.add('spinning');
+      document.getElementById('stop-btn').style.display = 'inline-flex';
       toast.className = 'scrape-toast visible expanded';
       toastOpen = true;
       stUpdate('Starting...', 'Launching browser...', 0, null, null, null, 0, 2);
@@ -899,6 +933,7 @@
             toast.className = 'scrape-toast visible expanded done';
             stUpdate('Complete', s.detail || 'Done', s.captured, s.saved, null, null, elapsed, 100);
             btn.disabled = false; icon.classList.remove('spinning');
+            document.getElementById('stop-btn').style.display = 'none';
             refreshStats(); loadPosts(); if (jobsVisible) loadJobs();
             setTimeout(() => toast.classList.remove('visible'), 15000);
             return;
@@ -922,6 +957,7 @@
             else if (j.status === 'empty') { toast.className='scrape-toast visible expanded'; stUpdate('No new posts','Feed was empty',0,0,null,null,Math.round(j.duration_sec),100); }
             else { toast.className='scrape-toast visible expanded error'; stUpdate('Failed',j.error||'Unknown',0,0,null,null,Math.round(j.duration_sec),0); }
             btn.disabled=false; icon.classList.remove('spinning');
+            document.getElementById('stop-btn').style.display = 'none';
             refreshStats(); loadPosts(); if(jobsVisible) loadJobs();
             setTimeout(()=>toast.classList.remove('visible'),15000);
             return;

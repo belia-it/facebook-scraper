@@ -1149,9 +1149,15 @@ def main():
                         dom_skipped_dup += 1
                         continue
 
-                    # Parse time from DOM text (e.g., "2 h", "45 min", "hier")
+                    # Parse time from DOM text (e.g., "2 h", "45 min", "hier").
+                    # If no time label is present, Facebook usually means "just now" —
+                    # the post is so recent the UI hasn't rendered a timestamp yet.
+                    # Fall back to ref_time so the post is kept (rather than dropped).
                     time_text = dp.get("timeText", "")
-                    pd, pt, _ = parse_facebook_date(time_text or "", ref_time)
+                    if time_text:
+                        pd, pt, _ = parse_facebook_date(time_text, ref_time)
+                    else:
+                        pd, pt = ref_time.strftime("%Y-%m-%d"), ref_time.strftime("%H:%M:%S")
                     if not pd or not pt:
                         dom_skipped_no_time += 1
                         continue

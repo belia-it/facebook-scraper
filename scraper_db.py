@@ -969,7 +969,8 @@ def main():
                                 break;
                             }
                         }
-                        if (!url) continue;
+                        // Keep posts even without a permalink — we'll synthesise a URL on the Python side
+                        // so Facebook-just-rendered posts (no link yet) are not dropped.
                         out.push({ author, text, url, timeText });
                     } catch(e) {}
                 }
@@ -983,8 +984,15 @@ def main():
                     return 0
                 added = 0
                 for p_ in posts or []:
-                    u = p_.get("url")
-                    if u and u not in dom_raw:
+                    u = p_.get("url") or ""
+                    if not u:
+                        # No permalink — synthesise a key from author+text so the post is still stored
+                        a = p_.get("author", "anon")
+                        t = (p_.get("text", "") or "")[:100]
+                        h = hashlib.md5((a + "::" + t).encode()).hexdigest()[:20]
+                        u = "dom-no-url:" + h
+                        p_["url"] = u  # keep key identical for downstream dedup
+                    if u not in dom_raw:
                         dom_raw[u] = p_
                         added += 1
                 return added
@@ -1114,8 +1122,17 @@ def main():
                 dom_skipped_dup = 0
                 for dp in dom_posts:
                     post_url = dp.get("url", "")
-                    if not post_url: continue
-                    # Normalize
+                    if not post_url:
+                        # Synthesise a stable URL based on author+text hash so the post can
+                        # still be saved and deduplicated in future runs.
+                        if GROUP_SLUG:
+                            _author = dp.get("author", "anon")
+                            _txt = (dp.get("text", "") or "")[:100]
+                            _h = hashlib.md5((_author + "::" + _txt).encode()).hexdigest()[:20]
+                            post_url = f"https://www.facebook.com/groups/{GROUP_SLUG}/posts/dom-{_h}"
+                        else:
+                            continue
+                    # Normalize — only reject if URL exists but is for a different group
                     if GROUP_SLUG and f"/groups/{GROUP_SLUG.lower()}" not in post_url.lower():
                         continue
 

@@ -986,12 +986,13 @@ def main():
                 for p_ in posts or []:
                     u = p_.get("url") or ""
                     if not u:
-                        # No permalink — synthesise a key from author+text so the post is still stored
+                        # No permalink in DOM — synthesise a URL that still passes
+                        # the /groups/{slug} filter and is unique per (author, text).
                         a = p_.get("author", "anon")
                         t = (p_.get("text", "") or "")[:100]
                         h = hashlib.md5((a + "::" + t).encode()).hexdigest()[:20]
-                        u = "dom-no-url:" + h
-                        p_["url"] = u  # keep key identical for downstream dedup
+                        u = f"https://www.facebook.com/groups/{GROUP_SLUG or 'unknown'}/posts/dom-{h}"
+                        p_["url"] = u
                     if u not in dom_raw:
                         dom_raw[u] = p_
                         added += 1

@@ -1,14 +1,18 @@
-# Use the official Playwright Python image which has everything pre-installed
 FROM mcr.microsoft.com/playwright/python:v1.58.0
 
 WORKDIR /app
 
-# Copy requirements and install python packages
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install scraper + API Python dependencies
+COPY requirements.txt /tmp/scraper-requirements.txt
+COPY api/requirements.txt /tmp/api-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/scraper-requirements.txt -r /tmp/api-requirements.txt
 
-# Copy the project files
+# Copy project files
 COPY . .
 
-# Run the python scraper
-CMD ["python", "scraper_playwright.py"]
+# api/posts.db → mount a Coolify volume at /app/api for DB persistence
+# facebook_auth.json → upload via /auth/upload in the dashboard
+
+EXPOSE 8000
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -516,50 +516,73 @@
           <span id="upload-result" style="margin-left:12px;font-size:0.78rem;color:rgba(255,255,255,0.5)"></span>
         </div>
 
-        <!-- One-Click Login (primary) -->
+        <!-- Login & Session Capture -->
         <div class="glass-panel" style="padding:22px;margin-bottom:20px;border:1px solid rgba(139,92,246,0.3)">
-          <h3 style="font-size:1rem;font-weight:700;margin-bottom:10px;color:#fff">&#x1F511; One-Click Login</h3>
-          <p style="font-size:0.82rem;color:rgba(255,255,255,0.65);margin-bottom:16px;line-height:1.55">
-            Click once. A live Facebook browser appears right here &mdash; log in, and the session is saved automatically. <strong>No copy-paste, no DevTools.</strong>
-          </p>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-            <div>
-              <label style="font-size:0.75rem;color:rgba(255,255,255,0.45);display:block;margin-bottom:4px">Facebook email (optional)</label>
-              <input type="email" id="login-email" placeholder="you@example.com"
-                     style="width:100%;box-sizing:border-box;font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff">
-            </div>
-            <div>
-              <label style="font-size:0.75rem;color:rgba(255,255,255,0.45);display:block;margin-bottom:4px">Password (optional)</label>
-              <input type="password" id="login-password" placeholder="••••••••"
-                     style="width:100%;box-sizing:border-box;font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff">
-            </div>
-          </div>
-          <p style="font-size:0.72rem;color:rgba(255,255,255,0.3);margin-bottom:12px;margin-top:-6px">
-            If provided, credentials are sent only to the in-browser login form and never stored by this app.
-          </p>
-          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-            <button class="btn-primary" onclick="startLoginPopup()" id="login-popup-btn" style="font-size:0.9rem;padding:11px 22px;font-weight:600">
-              &#x1F680; Open Login Window
+          <h3 style="font-size:1rem;font-weight:700;margin-bottom:14px;color:#fff">&#x1F511; Login &amp; Session Capture</h3>
+
+          <!-- Mode tabs -->
+          <div style="display:flex;margin-bottom:18px;border:1px solid rgba(255,255,255,0.1);border-radius:8px;overflow:hidden">
+            <button id="login-tab-local" onclick="switchLoginTab('local')"
+                    style="flex:1;padding:9px;font-size:0.82rem;font-weight:600;background:rgba(139,92,246,0.35);color:#fff;border:none;cursor:pointer">
+              &#x1F4BB; From Your Browser
             </button>
-            <button class="btn-ghost" onclick="cancelLoginPopup()" id="login-cancel-btn" style="font-size:0.82rem;padding:11px 16px;display:none">
-              Cancel
+            <button id="login-tab-vps" onclick="switchLoginTab('vps')"
+                    style="flex:1;padding:9px;font-size:0.82rem;font-weight:600;background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.45);border:none;border-left:1px solid rgba(255,255,255,0.1);cursor:pointer">
+              &#x1F5A5; Server Browser
             </button>
-            <span id="login-popup-status" style="font-size:0.82rem;color:rgba(255,255,255,0.55)"></span>
           </div>
-          <!-- Live remote viewer -->
-          <div id="login-viewer" style="display:none;margin-top:18px">
-            <p style="font-size:0.75rem;color:rgba(255,255,255,0.45);margin-bottom:8px">
-              Click the browser below to interact &bull; Type in the field to send keystrokes
+
+          <!-- Pane: local browser capture -->
+          <div id="login-pane-local">
+            <p style="font-size:0.82rem;color:rgba(255,255,255,0.6);margin-bottom:12px;line-height:1.55">
+              Make sure you are logged in to Facebook in your local browser, then run this command in your terminal:
             </p>
-            <div style="position:relative;display:block;border:1px solid rgba(255,255,255,0.12);border-radius:8px;overflow:hidden;cursor:crosshair;background:#000">
-              <img id="login-screenshot" src="" alt="Loading browser..."
-                   style="display:block;width:100%;height:auto"
-                   onclick="loginViewerClick(event)">
+            <div id="capture-cmd-box"
+                 style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px 14px;font-size:0.7rem;font-family:monospace;color:#a5f3fc;word-break:break-all;line-height:1.6;min-height:36px;margin-bottom:12px;cursor:pointer"
+                 onclick="copyCapureCmd()" title="Click to copy">Loading...</div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <button class="btn-primary" onclick="copyCapureCmd()" style="font-size:0.82rem;padding:8px 16px">&#x1F4CB; Copy Command</button>
+              <span id="capture-status" style="font-size:0.78rem;color:rgba(255,255,255,0.5)"></span>
             </div>
-            <input type="text" id="login-type-input"
-                   placeholder="Type here to send keystrokes to the browser..."
-                   style="margin-top:8px;width:100%;box-sizing:border-box;font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff"
-                   oninput="loginViewerType(event)" onkeydown="loginViewerKey(event)">
+            <p style="font-size:0.71rem;color:rgba(255,255,255,0.28);margin-top:10px">
+              Needs <code style="background:rgba(255,255,255,0.07);padding:1px 5px;border-radius:3px">pip install browser-cookie3</code> on your local machine.
+              Works with Chrome, Safari, Arc, Brave, Firefox.
+            </p>
+          </div>
+
+          <!-- Pane: VPS browser (Xvfb + live viewer) -->
+          <div id="login-pane-vps" style="display:none">
+            <p style="font-size:0.82rem;color:rgba(255,255,255,0.65);margin-bottom:14px;line-height:1.55">
+              Launches a real browser on the server. A live view appears below &mdash; log in there.
+            </p>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+              <div>
+                <label style="font-size:0.75rem;color:rgba(255,255,255,0.45);display:block;margin-bottom:4px">Email (optional — auto-fills)</label>
+                <input type="email" id="login-email" placeholder="you@example.com"
+                       style="width:100%;box-sizing:border-box;font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff">
+              </div>
+              <div>
+                <label style="font-size:0.75rem;color:rgba(255,255,255,0.45);display:block;margin-bottom:4px">Password (optional)</label>
+                <input type="password" id="login-password" placeholder="••••••••"
+                       style="width:100%;box-sizing:border-box;font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff">
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+              <button class="btn-primary" onclick="startLoginPopup()" id="login-popup-btn" style="font-size:0.9rem;padding:11px 22px;font-weight:600">
+                &#x1F680; Open Login Window
+              </button>
+              <button class="btn-ghost" onclick="cancelLoginPopup()" id="login-cancel-btn" style="font-size:0.82rem;padding:11px 16px;display:none">Cancel</button>
+              <span id="login-popup-status" style="font-size:0.82rem;color:rgba(255,255,255,0.55)"></span>
+            </div>
+            <div id="login-viewer" style="display:none">
+              <p style="font-size:0.75rem;color:rgba(255,255,255,0.4);margin-bottom:8px">Click to interact &bull; Type in the box to send keystrokes</p>
+              <div style="border:1px solid rgba(255,255,255,0.1);border-radius:8px;overflow:hidden;cursor:crosshair;background:#000">
+                <img id="login-screenshot" src="" style="display:block;width:100%;height:auto" onclick="loginViewerClick(event)">
+              </div>
+              <input type="text" id="login-type-input" placeholder="Type here to send keystrokes..."
+                     style="margin-top:8px;width:100%;box-sizing:border-box;font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff"
+                     oninput="loginViewerType(event)" onkeydown="loginViewerKey(event)">
+            </div>
           </div>
         </div>
 
@@ -1384,7 +1407,62 @@
     // One-click login popup
     let _loginPollTimer = null;
 
-    let _loginScreenshotTimer = null;
+    // ─── Login Tab Switching ──────────────────────────────────────────────
+    let _captureCmdText = '';
+    let _capturePollTimer = null;
+
+    function switchLoginTab(tab) {
+      const isLocal = tab === 'local';
+      document.getElementById('login-pane-local').style.display = isLocal ? '' : 'none';
+      document.getElementById('login-pane-vps').style.display  = isLocal ? 'none' : '';
+      document.getElementById('login-tab-local').style.background = isLocal ? 'rgba(139,92,246,0.35)' : 'rgba(255,255,255,0.05)';
+      document.getElementById('login-tab-local').style.color   = isLocal ? '#fff' : 'rgba(255,255,255,0.45)';
+      document.getElementById('login-tab-vps').style.background = isLocal ? 'rgba(255,255,255,0.05)' : 'rgba(139,92,246,0.35)';
+      document.getElementById('login-tab-vps').style.color     = isLocal ? 'rgba(255,255,255,0.45)' : '#fff';
+      if (isLocal && !_captureCmdText) loadCaptureCommand();
+    }
+
+    async function loadCaptureCommand() {
+      try {
+        const r = await fetch('/api/auth/capture-command');
+        const d = await r.json();
+        _captureCmdText = d.command;
+        document.getElementById('capture-cmd-box').textContent = _captureCmdText;
+        startCapturePolling();
+      } catch(e) {
+        document.getElementById('capture-cmd-box').textContent = 'Failed to load command.';
+      }
+    }
+
+    function copyCapureCmd() {
+      if (!_captureCmdText) return;
+      navigator.clipboard.writeText(_captureCmdText).then(() => {
+        const s = document.getElementById('capture-status');
+        s.textContent = '✓ Copied! Paste and run in your terminal.';
+        s.style.color = '#34d399';
+      });
+    }
+
+    function startCapturePolling() {
+      if (_capturePollTimer) clearInterval(_capturePollTimer);
+      const s = document.getElementById('capture-status');
+      s.textContent = 'Waiting for session...';
+      s.style.color = 'rgba(255,255,255,0.4)';
+      _capturePollTimer = setInterval(async () => {
+        try {
+          const r = await fetch('/api/auth/status');
+          const d = await r.json();
+          if (d.status === 'valid') {
+            clearInterval(_capturePollTimer); _capturePollTimer = null;
+            s.textContent = '✓ Session captured! (' + (d.profile || '') + ')';
+            s.style.color = '#34d399';
+            loadAuthStatus();
+          }
+        } catch(e) {}
+      }, 3000);
+    }
+
+        let _loginScreenshotTimer = null;
 
     function _startScreenshotPolling() {
       if (_loginScreenshotTimer) clearInterval(_loginScreenshotTimer);
@@ -1590,7 +1668,7 @@
       document.getElementById('tab-' + tab).classList.add('active');
       document.getElementById('pill-' + tab).classList.add('active');
       if (tab === 'jobs') loadJobs();
-      if (tab === 'settings') { loadAuthStatus(); loadSettings(); }
+      if (tab === 'settings') { loadAuthStatus(); loadSettings(); loadCaptureCommand(); }
     }
 
     function updatePillBadges() {

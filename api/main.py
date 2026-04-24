@@ -4,7 +4,7 @@ import asyncio
 import subprocess
 from contextlib import asynccontextmanager
 from typing import List, Optional
-from fastapi import FastAPI, Query, BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+from fastapi import FastAPI, Query, BackgroundTasks, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
 import json as _json
 from datetime import datetime as _dt
@@ -649,6 +649,65 @@ async def auth_key(key: str = Form(...)):
         raise HTTPException(404, "No active login session")
     await _login_page.keyboard.press(key)
     return {"ok": True}
+
+@app.post("/api/auth/receive-cookies")
+async def receive_cookies(request: Request):
+    """Receive cookies POSTed from the user's local browser via the capture command."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Expected JSON body")
+
+    cookies = body.get("cookies") or body.get("data", {}).get("cookies", [])
+    if not cookies:
+        raise HTTPException(400, "No cookies in payload")
+
+    # Build a Playwright storage_state compatible dict
+    state = {
+        "cookies": [
+            {
+                "name":     c.get("name", ""),
+                "value":    c.get("value", ""),
+                "domain":   c.get("domain", ".facebook.com"),
+                "path":     c.get("path", "/"),
+                "expires":  c.get("expirationDate", c.get("expires", -1)),
+                "httpOnly": c.get("httpOnly", False),
+                "secure":   c.get("secure", True),
+                "sameSite": c.get("sameSite", "None"),
+            }
+            for c in cookies
+            if c.get("name") and c.get("value")
+        ],
+        "origins": [],
+    }
+    names = {c["name"] for c in state["cookies"]}
+    if "c_user" not in names or "xs" not in names:
+        raise HTTPException(422, f"Missing required Facebook cookies (got: {sorted(names)})")
+
+    import json as _j
+    with open(AUTH_FILE, "w") as f:
+        _j.dump(state, f, indent=2)
+
+    return {"status": "ok", "message": f"Session saved ({len(state['cookies'])} cookies)"}
+
+
+@app.get("/api/auth/capture-command")
+async def capture_command(request: Request):
+    """Return a ready-to-run Python one-liner for local cookie capture."""
+    base = str(request.base_url).rstrip("/")
+    cmd = (
+        f"python3 -c \""
+        f"import json,urllib.request as r;"
+        f"import browser_cookie3 as b;"
+        f"cj=list(b.load(domain_name='.facebook.com'));"
+        f"cookies=[{{'name':c.name,'value':c.value,'domain':c.domain,'path':c.path,'secure':c.secure,'httpOnly':False,'sameSite':'None'}} for c in cj if c.value];"
+        f"data=json.dumps({{'cookies':cookies}}).encode();"
+        f"req=r.Request('{base}/api/auth/receive-cookies',data=data,headers={{'Content-Type':'application/json'}});"
+        f"print(r.urlopen(req).read().decode())"
+        f"\""
+    )
+    return {"command": cmd, "url": base}
+
 
 @app.delete("/api/auth")
 async def auth_clear():

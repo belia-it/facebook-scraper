@@ -9,6 +9,15 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to belia-it/facebook-scraper
+        run: |
+          git remote add belia https://x-access-token:${{ secrets.BELIA_GITHUB_TOKEN }}@github.com/belia-it/facebook-scraper.git
+          git push belia main
+
       - name: Trigger Coolify deployment
         run: |
           response=$(curl -s -w "\n%{http_code}" -X GET \

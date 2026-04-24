@@ -522,6 +522,21 @@
           <p style="font-size:0.82rem;color:rgba(255,255,255,0.65);margin-bottom:16px;line-height:1.55">
             Click once. A live Facebook browser appears right here &mdash; log in, and the session is saved automatically. <strong>No copy-paste, no DevTools.</strong>
           </p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+            <div>
+              <label style="font-size:0.75rem;color:rgba(255,255,255,0.45);display:block;margin-bottom:4px">Facebook email (optional)</label>
+              <input type="email" id="login-email" placeholder="you@example.com"
+                     style="width:100%;box-sizing:border-box;font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff">
+            </div>
+            <div>
+              <label style="font-size:0.75rem;color:rgba(255,255,255,0.45);display:block;margin-bottom:4px">Password (optional)</label>
+              <input type="password" id="login-password" placeholder="••••••••"
+                     style="width:100%;box-sizing:border-box;font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff">
+            </div>
+          </div>
+          <p style="font-size:0.72rem;color:rgba(255,255,255,0.3);margin-bottom:12px;margin-top:-6px">
+            If provided, credentials are sent only to the in-browser login form and never stored by this app.
+          </p>
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
             <button class="btn-primary" onclick="startLoginPopup()" id="login-popup-btn" style="font-size:0.9rem;padding:11px 22px;font-weight:600">
               &#x1F680; Open Login Window
@@ -1395,7 +1410,12 @@
       status.style.color = 'rgba(255,255,255,0.7)';
 
       try {
-        const res = await fetch('/api/auth/login', { method: 'POST' });
+        const fd = new FormData();
+        const em = document.getElementById('login-email').value.trim();
+        const pw = document.getElementById('login-password').value;
+        if (em) fd.append('email', em);
+        if (pw) fd.append('password', pw);
+        const res = await fetch('/api/auth/login', { method: 'POST', body: fd });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || 'Failed to launch');
         if (data.status === 'already_running') {

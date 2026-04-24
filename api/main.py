@@ -463,7 +463,43 @@ _login_state = {"running": False, "success": False, "error": None, "started_at":
 _login_page   = None   # live playwright Page reference for screenshot/click relay
 _login_xvfb   = None   # Xvfb subprocess
 
-async def _run_login_browser():
+# Known popup dismiss selectors / texts
+_POPUP_DISMISS = [
+    '[data-cookiebanner="accept_button"]',
+    'button[data-testid="cookie-policy-manage-dialog-accept-button"]',
+]
+_POPUP_TEXTS = [
+    "Ogoloow dhamaan xog-keydiyaasha",
+    "Ogoloow dhamaan",
+    "Accept all",
+    "Accept All",
+    "Allow all cookies",
+    "Allow All Cookies",
+    "OK",
+    "Got it",
+]
+
+async def _dismiss_popups(page):
+    """Click away known Facebook consent / notification dialogs."""
+    for sel in _POPUP_DISMISS:
+        try:
+            btn = await page.query_selector(sel)
+            if btn:
+                await btn.click()
+                await asyncio.sleep(0.4)
+                return
+        except Exception:
+            pass
+    for text in _POPUP_TEXTS:
+        try:
+            await page.click(f'text="{text}"', timeout=300)
+            await asyncio.sleep(0.4)
+            return
+        except Exception:
+            pass
+
+
+async def _run_login_browser(email: str = None, password: str = None):
     global _login_state, _login_page, _login_xvfb
     from playwright.async_api import async_playwright
 
@@ -493,10 +529,34 @@ async def _run_login_browser():
             _login_page = page
 
             await page.goto("https://www.facebook.com/", wait_until="commit", timeout=60000)
+            await asyncio.sleep(2)
+
+            # Auto-dismiss any cookie / consent popups
+            await _dismiss_popups(page)
+
+            # Auto-fill credentials if provided
+            if email and password:
+                _login_state["status_msg"] = "Filling in credentials..."
+                try:
+                    await page.wait_for_selector('#email', timeout=8000)
+                    await _dismiss_popups(page)  # dismiss again in case it appeared after load
+                    await page.fill('#email', email)
+                    await page.fill('#pass', password)
+                    await page.click('[name="login"]')
+                    await asyncio.sleep(3)
+                    await _dismiss_popups(page)
+                except Exception:
+                    pass  # fall back to manual login via viewer
 
             deadline = asyncio.get_event_loop().time() + 600
+            popup_tick = 0
             while asyncio.get_event_loop().time() < deadline:
                 try:
+                    # Periodically dismiss popups that appear during/after login
+                    popup_tick += 1
+                    if popup_tick % 3 == 0:
+                        await _dismiss_popups(page)
+
                     cookies = await ctx.cookies()
                     names = {c["name"] for c in cookies}
                     url = page.url
@@ -528,12 +588,16 @@ async def _run_login_browser():
 
 
 @app.post("/api/auth/login")
-async def auth_login(background_tasks: BackgroundTasks):
+async def auth_login(
+    background_tasks: BackgroundTasks,
+    email: Optional[str] = Form(None),
+    password: Optional[str] = Form(None),
+):
     global _login_state
     if _login_state.get("running"):
         return {"status": "already_running", "message": "Login session already active."}
     _login_state = {"running": True, "success": False, "error": None, "started_at": _dt.now().isoformat()}
-    background_tasks.add_task(_run_login_browser)
+    background_tasks.add_task(_run_login_browser, email=email, password=password)
     return {"status": "started", "message": "Browser starting — watch the live view below."}
 
 

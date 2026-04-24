@@ -520,7 +520,7 @@
         <div class="glass-panel" style="padding:22px;margin-bottom:20px;border:1px solid rgba(139,92,246,0.3)">
           <h3 style="font-size:1rem;font-weight:700;margin-bottom:10px;color:#fff">&#x1F511; One-Click Login</h3>
           <p style="font-size:0.82rem;color:rgba(255,255,255,0.65);margin-bottom:16px;line-height:1.55">
-            Click once. A browser window opens on Facebook &mdash; log in there (first time only). The app detects success automatically and saves your session. <strong>No copy-paste, no DevTools.</strong>
+            Click once. A live Facebook browser appears right here &mdash; log in, and the session is saved automatically. <strong>No copy-paste, no DevTools.</strong>
           </p>
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
             <button class="btn-primary" onclick="startLoginPopup()" id="login-popup-btn" style="font-size:0.9rem;padding:11px 22px;font-weight:600">
@@ -530,6 +530,21 @@
               Cancel
             </button>
             <span id="login-popup-status" style="font-size:0.82rem;color:rgba(255,255,255,0.55)"></span>
+          </div>
+          <!-- Live remote viewer -->
+          <div id="login-viewer" style="display:none;margin-top:18px">
+            <p style="font-size:0.75rem;color:rgba(255,255,255,0.45);margin-bottom:8px">
+              Click the browser below to interact &bull; Type in the field to send keystrokes
+            </p>
+            <div style="position:relative;display:block;border:1px solid rgba(255,255,255,0.12);border-radius:8px;overflow:hidden;cursor:crosshair;background:#000">
+              <img id="login-screenshot" src="" alt="Loading browser..."
+                   style="display:block;width:100%;height:auto"
+                   onclick="loginViewerClick(event)">
+            </div>
+            <input type="text" id="login-type-input"
+                   placeholder="Type here to send keystrokes to the browser..."
+                   style="margin-top:8px;width:100%;box-sizing:border-box;font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff"
+                   oninput="loginViewerType(event)" onkeydown="loginViewerKey(event)">
           </div>
         </div>
 
@@ -1354,13 +1369,29 @@
     // One-click login popup
     let _loginPollTimer = null;
 
+    let _loginScreenshotTimer = null;
+
+    function _startScreenshotPolling() {
+      if (_loginScreenshotTimer) clearInterval(_loginScreenshotTimer);
+      _loginScreenshotTimer = setInterval(() => {
+        const img = document.getElementById('login-screenshot');
+        if (img) img.src = '/api/auth/screenshot?t=' + Date.now();
+      }, 1200);
+    }
+
+    function _stopScreenshotPolling() {
+      if (_loginScreenshotTimer) { clearInterval(_loginScreenshotTimer); _loginScreenshotTimer = null; }
+      const img = document.getElementById('login-screenshot');
+      if (img) img.src = '';
+    }
+
     async function startLoginPopup() {
       const btn = document.getElementById('login-popup-btn');
       const cancelBtn = document.getElementById('login-cancel-btn');
       const status = document.getElementById('login-popup-status');
       btn.disabled = true;
       cancelBtn.style.display = 'inline-block';
-      status.textContent = 'Launching browser window...';
+      status.textContent = 'Starting virtual browser...';
       status.style.color = 'rgba(255,255,255,0.7)';
 
       try {
@@ -1371,8 +1402,11 @@
           status.textContent = data.message;
           status.style.color = '#fbbf24';
         } else {
-          status.textContent = 'Browser window opened. Log in to Facebook there...';
+          status.textContent = 'Browser loading — log in below...';
         }
+        document.getElementById('login-viewer').style.display = '';
+        document.getElementById('login-type-input').focus();
+        _startScreenshotPolling();
       } catch (e) {
         status.textContent = '\u2717 ' + e.message;
         status.style.color = '#f87171';
@@ -1388,10 +1422,12 @@
           const s = await r.json();
           if (!s.running) {
             clearInterval(_loginPollTimer); _loginPollTimer = null;
+            _stopScreenshotPolling();
             btn.disabled = false;
             cancelBtn.style.display = 'none';
+            document.getElementById('login-viewer').style.display = 'none';
             if (s.success) {
-              status.innerHTML = '\u2713 Session captured successfully';
+              status.innerHTML = '\u2713 Session captured successfully!';
               status.style.color = '#34d399';
               loadAuthStatus();
             } else {
@@ -1409,9 +1445,39 @@
     async function cancelLoginPopup() {
       try { await fetch('/api/auth/login/cancel', { method: 'POST' }); } catch(e) {}
       if (_loginPollTimer) { clearInterval(_loginPollTimer); _loginPollTimer = null; }
+      _stopScreenshotPolling();
       document.getElementById('login-popup-btn').disabled = false;
       document.getElementById('login-cancel-btn').style.display = 'none';
+      document.getElementById('login-viewer').style.display = 'none';
       document.getElementById('login-popup-status').textContent = 'Cancelled.';
+    }
+
+    async function loginViewerClick(e) {
+      const img = e.currentTarget;
+      const rect = img.getBoundingClientRect();
+      const x = Math.round((e.clientX - rect.left) * (1280 / rect.width));
+      const y = Math.round((e.clientY - rect.top)  * (900  / rect.height));
+      const fd = new FormData(); fd.append('x', x); fd.append('y', y);
+      await fetch('/api/auth/click', { method: 'POST', body: fd });
+      document.getElementById('login-type-input').focus();
+    }
+
+    async function loginViewerType(e) {
+      const input = e.currentTarget;
+      const text = input.value;
+      if (!text) return;
+      input.value = '';
+      const fd = new FormData(); fd.append('text', text);
+      await fetch('/api/auth/type', { method: 'POST', body: fd });
+    }
+
+    async function loginViewerKey(e) {
+      const special = ['Enter','Tab','Backspace','Delete','Escape','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'];
+      if (special.includes(e.key)) {
+        e.preventDefault();
+        const fd = new FormData(); fd.append('key', e.key);
+        await fetch('/api/auth/key', { method: 'POST', body: fd });
+      }
     }
 
     async function importFromBrowser() {

@@ -1,10 +1,11 @@
 import os
 import sys
+import asyncio
 import subprocess
 from contextlib import asynccontextmanager
 from typing import List, Optional
 from fastapi import FastAPI, Query, BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
 import json as _json
 from datetime import datetime as _dt
 from fastapi.staticfiles import StaticFiles
@@ -457,72 +458,133 @@ async def auth_import_browser(browser: str = Form("auto")):
 
 
 
-# In-process state for login popup
+# ── In-process login via Xvfb + async Playwright ─────────────────────────────
 _login_state = {"running": False, "success": False, "error": None, "started_at": None}
-_login_process = None
+_login_page   = None   # live playwright Page reference for screenshot/click relay
+_login_xvfb   = None   # Xvfb subprocess
+
+async def _run_login_browser():
+    global _login_state, _login_page, _login_xvfb
+    from playwright.async_api import async_playwright
+
+    try:
+        # Virtual display (VPS has no X server)
+        _login_xvfb = await asyncio.create_subprocess_exec(
+            "Xvfb", ":99", "-screen", "0", "1280x900x24",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        os.environ["DISPLAY"] = ":99"
+        await asyncio.sleep(1.5)
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=False,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            ctx_kwargs = {
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "viewport": {"width": 1280, "height": 900},
+            }
+            if os.path.exists(AUTH_FILE):
+                ctx_kwargs["storage_state"] = AUTH_FILE
+            ctx = await browser.new_context(**ctx_kwargs)
+            page = await ctx.new_page()
+            _login_page = page
+
+            await page.goto("https://www.facebook.com/", wait_until="commit", timeout=60000)
+
+            deadline = asyncio.get_event_loop().time() + 600
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    cookies = await ctx.cookies()
+                    names = {c["name"] for c in cookies}
+                    url = page.url
+                    if "c_user" in names and "xs" in names and "login" not in url and "checkpoint" not in url:
+                        await asyncio.sleep(2)
+                        cookies = await ctx.cookies()
+                        names = {c["name"] for c in cookies}
+                        if "c_user" in names and "xs" in names:
+                            await ctx.storage_state(path=AUTH_FILE)
+                            _login_state["success"] = True
+                            break
+                except Exception:
+                    break
+                await asyncio.sleep(1.5)
+            else:
+                _login_state["error"] = "Timed out (10 min)"
+
+            await browser.close()
+    except Exception as e:
+        _login_state["error"] = str(e)
+    finally:
+        _login_page = None
+        _login_state["running"] = False
+        if _login_xvfb:
+            try: _login_xvfb.terminate()
+            except: pass
+            _login_xvfb = None
+        os.environ.pop("DISPLAY", None)
 
 
 @app.post("/api/auth/login")
 async def auth_login(background_tasks: BackgroundTasks):
-    """Launch a visible Chromium window on facebook.com so the user can log in once.
-    When the feed loads, cookies are captured and saved automatically."""
-    global _login_state, _login_process
-
+    global _login_state
     if _login_state.get("running"):
-        return {"status": "already_running", "message": "Login window is already open."}
-
-    helper_script = os.path.join(ROOT_DIR, "login_popup_helper.py")
-    if not os.path.exists(helper_script):
-        raise HTTPException(status_code=500, detail=f"Helper script missing: {helper_script}")
-
+        return {"status": "already_running", "message": "Login session already active."}
     _login_state = {"running": True, "success": False, "error": None, "started_at": _dt.now().isoformat()}
-
-    def run_helper():
-        global _login_process, _login_state
-        try:
-            proc = subprocess.Popen(
-                [sys.executable, helper_script],
-                cwd=ROOT_DIR,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            _login_process = proc
-            out, _ = proc.communicate(timeout=600)  # 10 min max for user to log in
-            if proc.returncode == 0 and "LOGIN_SUCCESS" in (out or ""):
-                _login_state["success"] = True
-            else:
-                _login_state["error"] = (out or "").strip()[-500:] or f"Exit code {proc.returncode}"
-        except subprocess.TimeoutExpired:
-            if _login_process:
-                _login_process.kill()
-            _login_state["error"] = "Login window timed out (10 min)"
-        except Exception as e:
-            _login_state["error"] = str(e)
-        finally:
-            _login_state["running"] = False
-            _login_process = None
-
-    background_tasks.add_task(run_helper)
-    return {"status": "started", "message": "A browser window will open in a moment. Log in to Facebook there, then come back here."}
+    background_tasks.add_task(_run_login_browser)
+    return {"status": "started", "message": "Browser starting — watch the live view below."}
 
 
 @app.get("/api/auth/login/status")
 async def auth_login_status():
-    """Poll the login popup status."""
     return dict(_login_state)
 
 
 @app.post("/api/auth/login/cancel")
 async def auth_login_cancel():
-    """Kill the login popup if it is still open."""
-    global _login_process, _login_state
-    if _login_process:
-        try:
-            _login_process.kill()
+    global _login_xvfb, _login_state
+    if _login_xvfb:
+        try: _login_xvfb.terminate()
         except: pass
     _login_state["running"] = False
     return {"status": "cancelled"}
+
+
+@app.get("/api/auth/screenshot")
+async def auth_screenshot():
+    if _login_page is None:
+        raise HTTPException(404, "No active login session")
+    try:
+        img = await _login_page.screenshot(type="jpeg", quality=65)
+        return Response(content=img, media_type="image/jpeg")
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/auth/click")
+async def auth_click(x: float = Form(...), y: float = Form(...)):
+    if _login_page is None:
+        raise HTTPException(404, "No active login session")
+    await _login_page.mouse.click(x, y)
+    return {"ok": True}
+
+
+@app.post("/api/auth/type")
+async def auth_type(text: str = Form(...)):
+    if _login_page is None:
+        raise HTTPException(404, "No active login session")
+    await _login_page.keyboard.type(text, delay=30)
+    return {"ok": True}
+
+
+@app.post("/api/auth/key")
+async def auth_key(key: str = Form(...)):
+    if _login_page is None:
+        raise HTTPException(404, "No active login session")
+    await _login_page.keyboard.press(key)
+    return {"ok": True}
 
 @app.delete("/api/auth")
 async def auth_clear():

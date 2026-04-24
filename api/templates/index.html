@@ -442,7 +442,7 @@
     <div class="tab-panel" id="tab-jobs">
     <div class="jobs-section">
       <h2>📋 Scrape Jobs <button class="jobs-toggle" onclick="toggleJobs()">Show/Hide</button></h2>
-      <div id="jobs-container" style="display:none">
+      <div id="jobs-container">
         <div class="posts-table-wrapper">
           <table class="posts-table" id="jobs-table">
             <thead>
@@ -490,6 +490,9 @@
         <div class="glass-panel" style="padding:20px;margin-bottom:20px">
           <h3 style="font-size:0.9rem;font-weight:600;margin-bottom:14px;color:rgba(255,255,255,0.7)">Scraper Settings</h3>
           <div style="display:grid;grid-template-columns:160px 1fr auto;gap:10px 14px;align-items:center;margin-bottom:14px">
+            <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">Group URL</label>
+            <input type="text" id="set-group-url" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;width:100%">
+            <span style="font-size:0.72rem;color:rgba(255,255,255,0.3)">Facebook group URL to scrape</span>
             <label style="font-size:0.78rem;color:rgba(255,255,255,0.5);text-align:right">Age Limit (minutes)</label>
             <input type="number" id="set-age" min="1" max="1440" style="font-size:0.82rem;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;width:100px">
             <span style="font-size:0.72rem;color:rgba(255,255,255,0.3)">Only save posts newer than this</span>
@@ -1244,6 +1247,7 @@
       try {
         const res = await fetch('/api/settings');
         const s = await res.json();
+        document.getElementById('set-group-url').value = s.GROUP_URL || '';
         document.getElementById('set-age').value = s.AGE_LIMIT_MINUTES || 59;
         document.getElementById('set-scrolls').value = s.MAX_SCROLLS || 35;
         document.getElementById('set-tz').value = s.TIMEZONE_OFFSET || 1;
@@ -1256,6 +1260,7 @@
       result.style.color = 'rgba(255,255,255,0.5)';
       try {
         const fd = new FormData();
+        fd.append('GROUP_URL', document.getElementById('set-group-url').value);
         fd.append('AGE_LIMIT_MINUTES', document.getElementById('set-age').value);
         fd.append('MAX_SCROLLS', document.getElementById('set-scrolls').value);
         fd.append('TIMEZONE_OFFSET', document.getElementById('set-tz').value);

@@ -211,6 +211,7 @@ async def update_settings(
     AGE_LIMIT_MINUTES: int = Form(None),
     MAX_SCROLLS: int = Form(None),
     TIMEZONE_OFFSET: int = Form(None),
+    GROUP_URL: Optional[str] = Form(None),
 ):
     """Update .env settings."""
     from dotenv import dotenv_values
@@ -222,6 +223,8 @@ async def update_settings(
         vals["MAX_SCROLLS"] = str(MAX_SCROLLS)
     if TIMEZONE_OFFSET is not None:
         vals["TIMEZONE_OFFSET"] = str(TIMEZONE_OFFSET)
+    if GROUP_URL is not None:
+        vals["GROUP_URL"] = GROUP_URL
 
     # Read existing .env to preserve unknown keys
     lines = []

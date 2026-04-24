@@ -1,0 +1,24 @@
+name: Deploy to Coolify
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Coolify deployment
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X GET \
+            "https://coolify.belia-it.com/api/v1/deploy?uuid=el4jqpxikj5b5d884w5auhix&force=false" \
+            -H "Authorization: Bearer ${{ secrets.COOLIFY_DEPLOY_TOKEN }}")
+          body=$(echo "$response" | head -n 1)
+          status=$(echo "$response" | tail -n 1)
+          echo "Status: $status"
+          echo "Response: $body"
+          if [ "$status" -ne 200 ]; then
+            echo "Deployment trigger failed"
+            exit 1
+          fi

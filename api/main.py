@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 from contextlib import asynccontextmanager
-from typing import List
+from typing import List, Optional
 from fastapi import FastAPI, Query, BackgroundTasks, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 import json as _json

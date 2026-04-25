@@ -536,11 +536,10 @@
           <div id="login-pane-local">
 
             <!-- Step 1 -->
-            <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:18px">
+            <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:20px">
               <div style="min-width:28px;height:28px;border-radius:50%;background:rgba(139,92,246,0.5);display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;color:#fff;flex-shrink:0">1</div>
               <div style="flex:1">
                 <div style="font-size:0.88rem;font-weight:600;color:#fff;margin-bottom:4px">Log in to Facebook in your browser</div>
-                <div style="font-size:0.78rem;color:rgba(255,255,255,0.5);margin-bottom:8px">Open Facebook and make sure you are logged in.</div>
                 <a href="https://www.facebook.com" target="_blank"
                    style="display:inline-block;font-size:0.8rem;padding:7px 14px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);border-radius:7px;color:#93c5fd;text-decoration:none">
                   &#x1F310; Open Facebook &rarr;
@@ -549,14 +548,15 @@
             </div>
 
             <!-- Step 2 -->
-            <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:18px">
+            <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:20px">
               <div style="min-width:28px;height:28px;border-radius:50%;background:rgba(139,92,246,0.5);display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;color:#fff;flex-shrink:0">2</div>
               <div style="flex:1">
-                <div style="font-size:0.88rem;font-weight:600;color:#fff;margin-bottom:4px">Download &amp; run the capture script</div>
-                <div style="font-size:0.78rem;color:rgba(255,255,255,0.5);margin-bottom:10px">
-                  Choose your browser and download the script. <strong style="color:rgba(255,255,255,0.75)">Mac:</strong> right-click &rarr; Open &rarr; Open. <strong style="color:rgba(255,255,255,0.75)">Windows:</strong> double-click. It reads your Facebook session and sends it here automatically.
+                <div style="font-size:0.88rem;font-weight:600;color:#fff;margin-bottom:6px">Open Terminal and run this command</div>
+                <div style="font-size:0.75rem;color:rgba(255,255,255,0.4);margin-bottom:8px">
+                  Press <kbd style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:4px;padding:1px 6px;font-size:0.72rem">&#x2318; Space</kbd>
+                  &rarr; type <strong style="color:rgba(255,255,255,0.7)">Terminal</strong> &rarr; Enter
                 </div>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
                   <select id="capture-browser" onchange="updateCaptureLink()"
                           style="font-size:0.8rem;padding:7px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:7px;color:#fff">
                     <option value="auto">Auto-detect browser</option>
@@ -569,42 +569,36 @@
                     <option value="firefox">Firefox</option>
                     <option value="opera">Opera</option>
                   </select>
-                  <a id="capture-download-link" href="/api/auth/capture-script?browser=auto" download
-                     style="display:inline-block;font-size:0.82rem;font-weight:600;padding:8px 16px;background:rgba(139,92,246,0.6);border:1px solid rgba(139,92,246,0.4);border-radius:8px;color:#fff;text-decoration:none">
-                    &#x2B07; Download Script
-                  </a>
                 </div>
-                <p style="font-size:0.71rem;color:rgba(255,255,255,0.3);margin-top:8px;margin-bottom:0">
-                  &#x26A0; Mac Gatekeeper: after downloading, <strong style="color:rgba(255,255,255,0.5)">right-click &rarr; Open &rarr; Open</strong> (not double-click). &nbsp;&bull;&nbsp; <code style="background:rgba(255,255,255,0.07);padding:1px 4px;border-radius:3px">browser-cookie3</code> is auto-installed on first run.
-                </p>
+                <div id="capture-cmd-box"
+                     onclick="copyCapureCmd()"
+                     title="Click to copy"
+                     style="cursor:pointer;background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px 14px;font-size:0.7rem;font-family:monospace;color:#a5f3fc;word-break:break-all;line-height:1.7;margin-bottom:8px;transition:border-color 0.15s">
+                  Loading...
+                </div>
+                <button onclick="copyCapureCmd()"
+                        style="font-size:0.82rem;font-weight:600;padding:9px 20px;background:rgba(139,92,246,0.6);border:1px solid rgba(139,92,246,0.4);border-radius:8px;color:#fff;cursor:pointer">
+                  &#x1F4CB; Copy Command
+                </button>
+                <span id="copy-confirm" style="margin-left:10px;font-size:0.78rem;color:#34d399;opacity:0;transition:opacity 0.3s"></span>
               </div>
             </div>
 
-            <!-- Step 3 / status -->
+            <!-- Step 3 -->
             <div style="display:flex;gap:14px;align-items:flex-start">
               <div style="min-width:28px;height:28px;border-radius:50%;background:rgba(139,92,246,0.5);display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;color:#fff;flex-shrink:0">3</div>
               <div style="flex:1">
-                <div style="font-size:0.88rem;font-weight:600;color:#fff;margin-bottom:4px">Done — session captured automatically</div>
-                <div id="capture-status" style="font-size:0.82rem;color:rgba(255,255,255,0.45);display:flex;align-items:center;gap:8px">
-                  <span id="capture-status-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.2)"></span>
-                  <span id="capture-status-text">Waiting for script to run...</span>
+                <div style="font-size:0.88rem;font-weight:600;color:#fff;margin-bottom:4px">Paste &amp; press Enter — done!</div>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span id="capture-status-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.2);flex-shrink:0"></span>
+                  <span id="capture-status-text" style="font-size:0.82rem;color:rgba(255,255,255,0.45)">Waiting for script to run...</span>
                 </div>
               </div>
             </div>
 
-            <!-- Advanced: copy command -->
-            <details style="margin-top:18px">
-              <summary style="font-size:0.75rem;color:rgba(255,255,255,0.35);cursor:pointer;user-select:none">Advanced: copy &amp; run command manually</summary>
-              <div id="capture-cmd-box"
-                   style="margin-top:8px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.08);border-radius:7px;padding:10px 12px;font-size:0.68rem;font-family:monospace;color:#a5f3fc;word-break:break-all;line-height:1.6;cursor:pointer"
-                   onclick="copyCapureCmd()" title="Click to copy">Loading...</div>
-              <button onclick="copyCapureCmd()" style="margin-top:6px;font-size:0.75rem;padding:5px 12px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:rgba(255,255,255,0.6);cursor:pointer">
-                &#x1F4CB; Copy
-              </button>
-            </details>
           </div>
 
-          <!-- Pane: VPS browser (Xvfb + live viewer) -->
+                    <!-- Pane: VPS browser (Xvfb + live viewer) -->
           <div id="login-pane-vps" style="display:none">
             <p style="font-size:0.82rem;color:rgba(255,255,255,0.65);margin-bottom:14px;line-height:1.55">
               Launches a real browser on the server. A live view appears below &mdash; log in there.
@@ -1478,7 +1472,8 @@
 
     async function loadCaptureCommand() {
       try {
-        const r = await fetch('/api/auth/capture-command');
+        const b = document.getElementById('capture-browser') ? document.getElementById('capture-browser').value : 'auto';
+        const r = await fetch('/api/auth/capture-command?browser=' + b);
         const d = await r.json();
         _captureCmdText = d.command;
         document.getElementById('capture-cmd-box').textContent = _captureCmdText;
@@ -1491,15 +1486,22 @@
     function copyCapureCmd() {
       if (!_captureCmdText) return;
       navigator.clipboard.writeText(_captureCmdText).then(() => {
-        const s = document.getElementById('capture-status');
-        s.textContent = '✓ Copied! Paste and run in your terminal.';
-        s.style.color = '#34d399';
+        const box = document.getElementById('capture-cmd-box');
+        const confirm = document.getElementById('copy-confirm');
+        if (box) box.style.borderColor = 'rgba(52,211,153,0.5)';
+        if (confirm) {
+          confirm.textContent = '\u2713 Copied!';
+          confirm.style.opacity = '1';
+          setTimeout(() => { confirm.style.opacity = '0'; if (box) box.style.borderColor = 'rgba(255,255,255,0.1)'; }, 2000);
+        }
       });
     }
 
     function updateCaptureLink() {
-      const b = document.getElementById('capture-browser').value;
-      document.getElementById('capture-download-link').href = '/api/auth/capture-script?browser=' + b;
+      const b = document.getElementById('capture-browser') ? document.getElementById('capture-browser').value : 'auto';
+      if (document.getElementById('capture-download-link'))
+        document.getElementById('capture-download-link').href = '/api/auth/capture-script?browser=' + b;
+      loadCaptureCommand();
     }
 
     function startCapturePolling() {

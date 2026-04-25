@@ -673,7 +673,7 @@ async def receive_cookies(request: Request):
                 "expires":  c.get("expirationDate", c.get("expires", -1)),
                 "httpOnly": c.get("httpOnly", False),
                 "secure":   c.get("secure", True),
-                "sameSite": c.get("sameSite", "None"),
+                "sameSite": {"no_restriction":"None","unspecified":"Lax","lax":"Lax","strict":"Strict"}.get(str(c.get("sameSite","")).lower().replace("_",""),"None"),
             }
             for c in cookies
             if c.get("name") and c.get("value")

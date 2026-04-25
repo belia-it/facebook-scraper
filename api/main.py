@@ -691,6 +691,58 @@ async def receive_cookies(request: Request):
     return {"status": "ok", "message": f"Session saved ({len(state['cookies'])} cookies)"}
 
 
+@app.get("/api/auth/capture-script")
+async def capture_script(request: Request, browser: str = "auto"):
+    """Download a runnable capture script (.command for Mac/Linux, .bat for Windows)."""
+    import platform as _plat
+    base = str(request.base_url).rstrip("/")
+    ua = request.headers.get("user-agent", "").lower()
+    is_win = "windows" in ua
+
+    py_code = (
+        "import json,urllib.request,browser_cookie3\n"
+        "try:\n"
+        "  fn = getattr(browser_cookie3, '" + browser + "', browser_cookie3.load)\n"
+        "  cj = list(fn(domain_name='.facebook.com'))\n"
+        "  cookies=[{'name':c.name,'value':c.value,'domain':c.domain,'path':c.path,'secure':c.secure,'httpOnly':False,'sameSite':'None'} for c in cj if c.value]\n"
+        "  data=json.dumps({'cookies':cookies}).encode()\n"
+        "  req=urllib.request.Request('" + base + "/api/auth/receive-cookies',data=data,headers={'Content-Type':'application/json'})\n"
+        "  res=json.loads(urllib.request.urlopen(req).read())\n"
+        "  print('SUCCESS:', res.get('message','Done'))\n"
+        "except Exception as e:\n"
+        "  print('ERROR:', e)\n"
+    )
+
+    if is_win:
+        script = (
+            "@echo off\r\n"
+            "echo Facebook Session Capture\r\n"
+            "echo ========================\r\n"
+            "python -c \"import browser_cookie3\" 2>nul || pip install browser-cookie3 --quiet\r\n"
+            f"python -c \"{py_code}\"\r\n"
+            "pause\r\n"
+        )
+        media = "application/octet-stream"
+        filename = "capture_session.bat"
+    else:
+        script = (
+            "#!/bin/bash\n"
+            "echo \"\U0001F511 Facebook Session Capture\"\n"
+            "echo \"==============================\"\n"
+            "python3 -c \"import browser_cookie3\" 2>/dev/null || pip3 install browser-cookie3 --quiet\n"
+            f"python3 -c \"{py_code}\"\n"
+            "echo \"\"\n"
+            "echo \"Press Enter to close...\"\n"
+            "read\n"
+        )
+        media = "application/octet-stream"
+        filename = "capture_session.command"
+
+    from fastapi.responses import Response as _Resp
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return _Resp(content=script.encode(), media_type=media, headers=headers)
+
+
 @app.get("/api/auth/capture-command")
 async def capture_command(request: Request):
     """Return a ready-to-run Python one-liner for local cookie capture."""

@@ -534,20 +534,76 @@
 
           <!-- Pane: local browser capture -->
           <div id="login-pane-local">
-            <p style="font-size:0.82rem;color:rgba(255,255,255,0.6);margin-bottom:12px;line-height:1.55">
-              Make sure you are logged in to Facebook in your local browser, then run this command in your terminal:
-            </p>
-            <div id="capture-cmd-box"
-                 style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px 14px;font-size:0.7rem;font-family:monospace;color:#a5f3fc;word-break:break-all;line-height:1.6;min-height:36px;margin-bottom:12px;cursor:pointer"
-                 onclick="copyCapureCmd()" title="Click to copy">Loading...</div>
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-              <button class="btn-primary" onclick="copyCapureCmd()" style="font-size:0.82rem;padding:8px 16px">&#x1F4CB; Copy Command</button>
-              <span id="capture-status" style="font-size:0.78rem;color:rgba(255,255,255,0.5)"></span>
+
+            <!-- Step 1 -->
+            <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:18px">
+              <div style="min-width:28px;height:28px;border-radius:50%;background:rgba(139,92,246,0.5);display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;color:#fff;flex-shrink:0">1</div>
+              <div style="flex:1">
+                <div style="font-size:0.88rem;font-weight:600;color:#fff;margin-bottom:4px">Log in to Facebook in your browser</div>
+                <div style="font-size:0.78rem;color:rgba(255,255,255,0.5);margin-bottom:8px">Open Facebook and make sure you are logged in.</div>
+                <a href="https://www.facebook.com" target="_blank"
+                   style="display:inline-block;font-size:0.8rem;padding:7px 14px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);border-radius:7px;color:#93c5fd;text-decoration:none">
+                  &#x1F310; Open Facebook &rarr;
+                </a>
+              </div>
             </div>
-            <p style="font-size:0.71rem;color:rgba(255,255,255,0.28);margin-top:10px">
-              Needs <code style="background:rgba(255,255,255,0.07);padding:1px 5px;border-radius:3px">pip install browser-cookie3</code> on your local machine.
-              Works with Chrome, Safari, Arc, Brave, Firefox.
-            </p>
+
+            <!-- Step 2 -->
+            <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:18px">
+              <div style="min-width:28px;height:28px;border-radius:50%;background:rgba(139,92,246,0.5);display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;color:#fff;flex-shrink:0">2</div>
+              <div style="flex:1">
+                <div style="font-size:0.88rem;font-weight:600;color:#fff;margin-bottom:4px">Download &amp; run the capture script</div>
+                <div style="font-size:0.78rem;color:rgba(255,255,255,0.5);margin-bottom:10px">
+                  Choose your browser, download the script, then double-click it. It reads your Facebook session and sends it here automatically.
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                  <select id="capture-browser" onchange="updateCaptureLink()"
+                          style="font-size:0.8rem;padding:7px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:7px;color:#fff">
+                    <option value="auto">Auto-detect browser</option>
+                    <option value="chrome">Chrome</option>
+                    <option value="chromium">Chromium</option>
+                    <option value="brave">Brave</option>
+                    <option value="edge">Edge</option>
+                    <option value="arc">Arc</option>
+                    <option value="safari">Safari</option>
+                    <option value="firefox">Firefox</option>
+                    <option value="opera">Opera</option>
+                  </select>
+                  <a id="capture-download-link" href="/api/auth/capture-script?browser=auto" download
+                     style="display:inline-block;font-size:0.82rem;font-weight:600;padding:8px 16px;background:rgba(139,92,246,0.6);border:1px solid rgba(139,92,246,0.4);border-radius:8px;color:#fff;text-decoration:none">
+                    &#x2B07; Download Script
+                  </a>
+                </div>
+                <p style="font-size:0.71rem;color:rgba(255,255,255,0.3);margin-top:8px;margin-bottom:0">
+                  Mac: double-click the <code style="background:rgba(255,255,255,0.07);padding:1px 4px;border-radius:3px">.command</code> file &nbsp;&bull;&nbsp;
+                  Windows: double-click the <code style="background:rgba(255,255,255,0.07);padding:1px 4px;border-radius:3px">.bat</code> file &nbsp;&bull;&nbsp;
+                  Needs <code style="background:rgba(255,255,255,0.07);padding:1px 4px;border-radius:3px">pip install browser-cookie3</code> once (the script does it automatically)
+                </p>
+              </div>
+            </div>
+
+            <!-- Step 3 / status -->
+            <div style="display:flex;gap:14px;align-items:flex-start">
+              <div style="min-width:28px;height:28px;border-radius:50%;background:rgba(139,92,246,0.5);display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;color:#fff;flex-shrink:0">3</div>
+              <div style="flex:1">
+                <div style="font-size:0.88rem;font-weight:600;color:#fff;margin-bottom:4px">Done — session captured automatically</div>
+                <div id="capture-status" style="font-size:0.82rem;color:rgba(255,255,255,0.45);display:flex;align-items:center;gap:8px">
+                  <span id="capture-status-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.2)"></span>
+                  <span id="capture-status-text">Waiting for script to run...</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Advanced: copy command -->
+            <details style="margin-top:18px">
+              <summary style="font-size:0.75rem;color:rgba(255,255,255,0.35);cursor:pointer;user-select:none">Advanced: copy &amp; run command manually</summary>
+              <div id="capture-cmd-box"
+                   style="margin-top:8px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.08);border-radius:7px;padding:10px 12px;font-size:0.68rem;font-family:monospace;color:#a5f3fc;word-break:break-all;line-height:1.6;cursor:pointer"
+                   onclick="copyCapureCmd()" title="Click to copy">Loading...</div>
+              <button onclick="copyCapureCmd()" style="margin-top:6px;font-size:0.75rem;padding:5px 12px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:rgba(255,255,255,0.6);cursor:pointer">
+                &#x1F4CB; Copy
+              </button>
+            </details>
           </div>
 
           <!-- Pane: VPS browser (Xvfb + live viewer) -->
@@ -1443,19 +1499,25 @@
       });
     }
 
+    function updateCaptureLink() {
+      const b = document.getElementById('capture-browser').value;
+      document.getElementById('capture-download-link').href = '/api/auth/capture-script?browser=' + b;
+    }
+
     function startCapturePolling() {
       if (_capturePollTimer) clearInterval(_capturePollTimer);
-      const s = document.getElementById('capture-status');
-      s.textContent = 'Waiting for session...';
-      s.style.color = 'rgba(255,255,255,0.4)';
+      const dot  = document.getElementById('capture-status-dot');
+      const text = document.getElementById('capture-status-text');
+      if (dot)  { dot.style.background = '#fbbf24'; dot.style.boxShadow = '0 0 6px rgba(251,191,36,0.5)'; }
+      if (text) text.textContent = 'Waiting for script to run...';
       _capturePollTimer = setInterval(async () => {
         try {
           const r = await fetch('/api/auth/status');
           const d = await r.json();
           if (d.status === 'valid') {
             clearInterval(_capturePollTimer); _capturePollTimer = null;
-            s.textContent = '✓ Session captured! (' + (d.profile || '') + ')';
-            s.style.color = '#34d399';
+            if (dot)  { dot.style.background = '#34d399'; dot.style.boxShadow = '0 0 6px rgba(52,211,153,0.5)'; }
+            if (text) { text.textContent = '\u2713 Session captured successfully!'; text.style.color = '#34d399'; }
             loadAuthStatus();
           }
         } catch(e) {}

@@ -551,38 +551,49 @@
             <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:20px">
               <div style="min-width:28px;height:28px;border-radius:50%;background:rgba(139,92,246,0.5);display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;color:#fff;flex-shrink:0">2</div>
               <div style="flex:1">
-                <div style="font-size:0.88rem;font-weight:600;color:#fff;margin-bottom:6px">Open Terminal and run this command</div>
-                <div style="font-size:0.75rem;color:rgba(255,255,255,0.4);margin-bottom:8px">
-                  Press <kbd style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:4px;padding:1px 6px;font-size:0.72rem">&#x2318; Space</kbd>
-                  &rarr; type <strong style="color:rgba(255,255,255,0.7)">Terminal</strong> &rarr; Enter
+                <div style="font-size:0.88rem;font-weight:600;color:#fff;margin-bottom:6px">Export your Facebook cookies</div>
+                <div style="font-size:0.78rem;color:rgba(255,255,255,0.5);margin-bottom:10px;line-height:1.6">
+                  Install the <a href="https://cookie-editor.com" target="_blank" style="color:#93c5fd">Cookie-Editor</a> extension in your browser.
+                  Go to <strong style="color:rgba(255,255,255,0.8)">facebook.com</strong>, click the extension icon,
+                  then click <strong style="color:rgba(255,255,255,0.8)">Export &rarr; Export as JSON</strong>. Copy all the text.
                 </div>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-                  <select id="capture-browser" onchange="updateCaptureLink()"
-                          style="font-size:0.8rem;padding:7px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:7px;color:#fff">
-                    <option value="auto">Auto-detect browser</option>
-                    <option value="chrome">Chrome</option>
-                    <option value="chromium">Chromium</option>
-                    <option value="brave">Brave</option>
-                    <option value="edge">Edge</option>
-                    <option value="arc">Arc</option>
-                    <option value="safari">Safari</option>
-                    <option value="firefox">Firefox</option>
-                    <option value="opera">Opera</option>
-                  </select>
+                <textarea id="cookies-paste-box" rows="5"
+                  placeholder='Paste the Cookie-Editor JSON here&#10;[{"name":"c_user","value":"..."}]'
+                  style="width:100%;box-sizing:border-box;font-size:0.72rem;font-family:monospace;padding:10px 12px;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#a5f3fc;resize:vertical;line-height:1.5"></textarea>
+                <div style="margin-top:8px;display:flex;gap:10px;align-items:center">
+                  <button onclick="submitPastedCookies()"
+                          style="font-size:0.85rem;font-weight:600;padding:9px 22px;background:rgba(139,92,246,0.6);border:1px solid rgba(139,92,246,0.4);border-radius:8px;color:#fff;cursor:pointer">
+                    &#x2192; Send to Server
+                  </button>
+                  <span id="paste-submit-status" style="font-size:0.78rem;color:rgba(255,255,255,0.5)"></span>
                 </div>
-                <div id="capture-cmd-box"
-                     onclick="copyCapureCmd()"
-                     title="Click to copy"
-                     style="cursor:pointer;background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px 14px;font-size:0.7rem;font-family:monospace;color:#a5f3fc;word-break:break-all;line-height:1.7;margin-bottom:8px;transition:border-color 0.15s">
-                  Loading...
-                </div>
-                <button onclick="copyCapureCmd()"
-                        style="font-size:0.82rem;font-weight:600;padding:9px 20px;background:rgba(139,92,246,0.6);border:1px solid rgba(139,92,246,0.4);border-radius:8px;color:#fff;cursor:pointer">
-                  &#x1F4CB; Copy Command
-                </button>
-                <span id="copy-confirm" style="margin-left:10px;font-size:0.78rem;color:#34d399;opacity:0;transition:opacity 0.3s"></span>
               </div>
             </div>
+
+            <!-- Terminal fallback (advanced) -->
+            <details style="margin-bottom:20px">
+              <summary style="font-size:0.75rem;color:rgba(255,255,255,0.3);cursor:pointer;user-select:none;margin-bottom:8px">Advanced: Terminal command</summary>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;margin-top:8px">
+                <select id="capture-browser" onchange="updateCaptureLink()"
+                        style="font-size:0.8rem;padding:7px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:7px;color:#fff">
+                  <option value="auto">Auto-detect</option>
+                  <option value="chrome">Chrome</option>
+                  <option value="brave">Brave</option>
+                  <option value="safari">Safari</option>
+                  <option value="firefox">Firefox</option>
+                </select>
+              </div>
+              <div id="capture-cmd-box"
+                   onclick="copyCapureCmd()" title="Click to copy"
+                   style="cursor:pointer;background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:10px 12px;font-size:0.68rem;font-family:monospace;color:#a5f3fc;word-break:break-all;line-height:1.7;margin-bottom:6px">
+                Loading...
+              </div>
+              <button onclick="copyCapureCmd()"
+                      style="font-size:0.78rem;padding:6px 14px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:rgba(255,255,255,0.6);cursor:pointer">
+                &#x1F4CB; Copy
+              </button>
+              <span id="copy-confirm" style="margin-left:8px;font-size:0.75rem;color:#34d399;opacity:0;transition:opacity 0.3s"></span>
+            </details>
 
             <!-- Step 3 -->
             <div style="display:flex;gap:14px;align-items:flex-start">
@@ -1495,6 +1506,36 @@
           setTimeout(() => { confirm.style.opacity = '0'; if (box) box.style.borderColor = 'rgba(255,255,255,0.1)'; }, 2000);
         }
       });
+    }
+
+    async function submitPastedCookies() {
+      const box = document.getElementById('cookies-paste-box');
+      const status = document.getElementById('paste-submit-status');
+      const text = (box.value || '').trim();
+      if (!text) { status.textContent = 'Paste cookies first.'; status.style.color = '#f87171'; return; }
+      let cookies;
+      try { cookies = JSON.parse(text); } catch(e) { status.textContent = '\u2717 Invalid JSON — copy again from Cookie-Editor'; status.style.color = '#f87171'; return; }
+      status.textContent = 'Sending...'; status.style.color = 'rgba(255,255,255,0.5)';
+      try {
+        const res = await fetch('/api/auth/receive-cookies', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({cookies})
+        });
+        const d = await res.json();
+        if (res.ok) {
+          status.textContent = '\u2713 ' + d.message;
+          status.style.color = '#34d399';
+          loadAuthStatus();
+          const dot = document.getElementById('capture-status-dot');
+          const txt = document.getElementById('capture-status-text');
+          if (dot) { dot.style.background='#34d399'; dot.style.boxShadow='0 0 6px rgba(52,211,153,0.5)'; }
+          if (txt) { txt.textContent='\u2713 Session captured!'; txt.style.color='#34d399'; }
+        } else {
+          status.textContent = '\u2717 ' + (d.detail || d.message || 'Failed');
+          status.style.color = '#f87171';
+        }
+      } catch(e) { status.textContent = '\u2717 ' + e.message; status.style.color = '#f87171'; }
     }
 
     function updateCaptureLink() {

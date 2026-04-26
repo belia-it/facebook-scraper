@@ -274,9 +274,39 @@
     .modal-overlay.open { opacity: 1; pointer-events: auto; }
     .modal-box {
       background: #1a1a2e; border: 1px solid rgba(255,255,255,0.12);
-      border-radius: 16px; width: 90%; max-width: 640px; max-height: 80vh;
-      overflow-y: auto; padding: 28px; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+      border-radius: 16px; width: 90%; max-width: 680px; max-height: 88vh;
+      overflow-y: auto; padding: 0; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
     }
+    .modal-card {
+      padding: 24px 28px 20px;
+      border-radius: 16px 16px 0 0;
+      background: var(--card-bg, linear-gradient(135deg,#312e81,#1e1b4b));
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .modal-card-route {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 1.15rem; font-weight: 700; color: #fff; margin-bottom: 14px;
+    }
+    .modal-card-arrow { color: rgba(255,255,255,0.4); font-size: 1rem; }
+    .modal-card-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+    .modal-chip {
+      background: rgba(255,255,255,0.12); border-radius: 20px;
+      padding: 4px 12px; font-size: 0.75rem; color: rgba(255,255,255,0.85);
+      display: flex; align-items: center; gap: 5px;
+    }
+    .modal-card-name { font-size: 0.78rem; color: rgba(255,255,255,0.5); }
+    .modal-card-controls {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 10px 28px; border-bottom: 1px solid rgba(255,255,255,0.06);
+      background: rgba(0,0,0,0.2);
+    }
+    .modal-color-btn {
+      width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent;
+      cursor: pointer; transition: transform 0.15s;
+    }
+    .modal-color-btn.active { border-color: #fff; transform: scale(1.2); }
+    .modal-fields { padding: 20px 28px 24px; }
+    .modal-toggle-row { display: flex; align-items: center; gap: 6px; font-size: 0.72rem; color: rgba(255,255,255,0.4); margin-left: auto; cursor: pointer; }
     .modal-header {
       display: flex; justify-content: space-between; align-items: center;
       margin-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 14px;
@@ -708,11 +738,35 @@
   <!-- Post Detail Modal -->
   <div class="modal-overlay" id="post-modal" onclick="if(event.target===this)closeModal()">
     <div class="modal-box">
-      <div class="modal-header">
-        <h3 id="modal-title">Post Details</h3>
-        <button class="modal-close" onclick="closeModal()">&times;</button>
+      <!-- Visual card overlay -->
+      <div class="modal-card" id="modal-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+          <div id="modal-card-badge" style="font-size:0.72rem;font-weight:600;padding:3px 10px;border-radius:12px;background:rgba(255,255,255,0.15);color:#fff"></div>
+          <button class="modal-close" onclick="closeModal()" style="margin-top:-4px">&times;</button>
+        </div>
+        <div class="modal-card-route">
+          <span id="modal-from">—</span>
+          <span class="modal-card-arrow">&#x2192;</span>
+          <span id="modal-to">—</span>
+        </div>
+        <div class="modal-card-chips" id="modal-chips"></div>
+        <div class="modal-card-name" id="modal-card-name"></div>
       </div>
-      <div id="modal-body"></div>
+      <!-- Customize controls -->
+      <div class="modal-card-controls" id="modal-controls">
+        <span style="font-size:0.72rem;color:rgba(255,255,255,0.35);margin-right:4px">Color:</span>
+        <div class="modal-color-btn active" style="background:linear-gradient(135deg,#312e81,#1e1b4b)" data-bg="linear-gradient(135deg,#312e81,#1e1b4b)" onclick="setCardBg(this)"></div>
+        <div class="modal-color-btn" style="background:linear-gradient(135deg,#065f46,#064e3b)" data-bg="linear-gradient(135deg,#065f46,#064e3b)" onclick="setCardBg(this)"></div>
+        <div class="modal-color-btn" style="background:linear-gradient(135deg,#7c2d12,#431407)" data-bg="linear-gradient(135deg,#7c2d12,#431407)" onclick="setCardBg(this)"></div>
+        <div class="modal-color-btn" style="background:linear-gradient(135deg,#1e3a5f,#0c1d35)" data-bg="linear-gradient(135deg,#1e3a5f,#0c1d35)" onclick="setCardBg(this)"></div>
+        <div class="modal-color-btn" style="background:linear-gradient(135deg,#4a1d96,#2e1065)" data-bg="linear-gradient(135deg,#4a1d96,#2e1065)" onclick="setCardBg(this)"></div>
+        <div class="modal-color-btn" style="background:linear-gradient(135deg,#1f2937,#111827)" data-bg="linear-gradient(135deg,#1f2937,#111827)" onclick="setCardBg(this)"></div>
+        <label class="modal-toggle-row">
+          <input type="checkbox" id="modal-show-text" checked onchange="toggleModalText()"> Show full text
+        </label>
+      </div>
+      <!-- Fields -->
+      <div class="modal-fields" id="modal-body"></div>
     </div>
   </div>
 
@@ -1255,50 +1309,78 @@
     // ─── Post Detail Modal ──────────────────────────────────────────────
     const eyeIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
 
+    let _modalPost = null;
+
     function showPostDetail(idx) {
       const post = (window._displayedPosts || currentPosts)[idx];
       if (!post) return;
+      _modalPost = post;
+
+      // ── Populate visual card ────────────────────────────────────────────
+      const from = [post.from_city, post.from_area].filter(Boolean).join(', ') || '?';
+      const to   = [post.to_city,   post.to_area  ].filter(Boolean).join(', ') || '?';
+      document.getElementById('modal-from').textContent = from;
+      document.getElementById('modal-to').textContent   = to;
+      document.getElementById('modal-card-name').textContent = post.profile_name || '';
+
+      const badge = document.getElementById('modal-card-badge');
+      badge.textContent = post.offer_or_demand || '';
+      badge.style.background = post.offer_or_demand === 'offer'
+        ? 'rgba(52,211,153,0.25)' : post.offer_or_demand === 'demand'
+        ? 'rgba(251,191,36,0.25)' : 'rgba(255,255,255,0.12)';
+
+      const chips = [];
+      if (post.post_date || post.post_time)
+        chips.push(['📅', `${post.post_date || ''} ${post.post_time || ''}`.trim()]);
+      if (post.preferred_departure_time) chips.push(['🕐', post.preferred_departure_time]);
+      if (post.price)      chips.push(['💰', post.price]);
+      if (post.nr_passengers) chips.push(['👥', post.nr_passengers]);
+      if (post.gender)     chips.push(['👤', post.gender]);
+      document.getElementById('modal-chips').innerHTML = chips
+        .map(([ic, val]) => `<div class="modal-chip">${ic} ${escapeHtml(String(val))}</div>`)
+        .join('');
+
+      // ── Populate fields ─────────────────────────────────────────────────
+      _renderModalFields(post, document.getElementById('modal-show-text').checked);
+      document.getElementById('post-modal').classList.add('open');
+    }
+
+    function _renderModalFields(post, showText) {
       const fields = [
-        ['Profile', post.profile_name],
-        ['Date', `${post.post_date || ''} ${post.post_time || ''}`],
-        ['Post Text', post.post_text],
-        ['English', post.post_text_english],
-        ['French', post.post_text_french],
-        ['Type', post.offer_or_demand],
-        ['From', [post.from_city, post.from_area].filter(Boolean).join(', ')],
-        ['To', [post.to_city, post.to_area].filter(Boolean).join(', ')],
-        ['Departure', post.preferred_departure_time],
-        ['Price', post.price],
-        ['Passengers', post.nr_passengers],
-        ['Gender', post.gender],
+        ['Post Text', showText ? post.post_text : null],
+        ['English',   showText ? post.post_text_english : null],
+        ['French',    showText ? post.post_text_french  : null],
         ['URL', post.post_url],
         ['Week', `W${post.calendar_week || '?'} — ${post.weekday || ''}`],
         ['Scraped', post.scrape_timestamp],
-        ['Captured At', post.captured_at],
         ['Job ID', post.job_id ? '#' + post.job_id : null],
       ];
       let meta = null;
       try { if (post.metadata) meta = JSON.parse(post.metadata); } catch(e) {}
 
-      let html = fields.map(([label, val]) => {
+      let h = fields.map(([label, val]) => {
         if (!val) return '';
         const isUrl = label === 'URL';
         return `<div class="modal-field">
           <div class="mf-label">${label}</div>
-          <div class="mf-value">${isUrl ? `<a href="${escapeHtml(val)}" target="_blank" style="color:#a78bfa">${escapeHtml(val)}</a>` : escapeHtml(val)}</div>
+          <div class="mf-value">${isUrl
+            ? `<a href="${escapeHtml(val)}" target="_blank" style="color:#a78bfa">${escapeHtml(val)}</a>`
+            : escapeHtml(val)}</div>
         </div>`;
       }).join('');
+      if (meta) h += `<div class="modal-field"><div class="mf-label">Raw Metadata</div><div class="mf-value mono">${escapeHtml(JSON.stringify(meta,null,2))}</div></div>`;
+      document.getElementById('modal-body').innerHTML = h;
+    }
 
-      if (meta) {
-        html += `<div class="modal-field">
-          <div class="mf-label">Raw Metadata</div>
-          <div class="mf-value mono">${escapeHtml(JSON.stringify(meta, null, 2))}</div>
-        </div>`;
-      }
+    function toggleModalText() {
+      if (_modalPost) _renderModalFields(_modalPost, document.getElementById('modal-show-text').checked);
+    }
 
-      document.getElementById('modal-title').textContent = post.profile_name || 'Post Details';
-      document.getElementById('modal-body').innerHTML = html;
-      document.getElementById('post-modal').classList.add('open');
+    function setCardBg(el) {
+      document.querySelectorAll('.modal-color-btn').forEach(b => b.classList.remove('active'));
+      el.classList.add('active');
+      document.getElementById('modal-card').style.setProperty('--card-bg', el.dataset.bg);
+      document.getElementById('modal-card').style.background = el.dataset.bg;
     }
 
     function closeModal() {

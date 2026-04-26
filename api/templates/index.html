@@ -1311,38 +1311,140 @@
 
     let _modalPost = null;
 
+    // ─── Canvas card state ─────────────────────────────────────────────────────
+    let _cardC1 = '#312e81', _cardC2 = '#1e1b4b';
+    let _canvasBgImage = null;
+
+    function redrawCanvas() {
+      const canvas = document.getElementById('modal-canvas');
+      if (!canvas || !_modalPost) return;
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      const post = _modalPost;
+
+      // Background gradient
+      const grad = ctx.createLinearGradient(0, 0, W, H);
+      grad.addColorStop(0, _cardC1);
+      grad.addColorStop(1, _cardC2);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      // Optional bg image with overlay
+      if (_canvasBgImage) {
+        const alpha = 1 - (parseInt(document.getElementById('overlay-opacity').value) / 100);
+        ctx.globalAlpha = Math.max(0.05, alpha);
+        const iw = _canvasBgImage.width, ih = _canvasBgImage.height;
+        const scale = Math.max(W / iw, H / ih);
+        const sw = iw * scale, sh = ih * scale;
+        ctx.drawImage(_canvasBgImage, (W - sw) / 2, (H - sh) / 2, sw, sh);
+        ctx.globalAlpha = 1;
+        const tint = ctx.createLinearGradient(0, 0, W, H);
+        tint.addColorStop(0, _cardC1 + 'bb');
+        tint.addColorStop(1, _cardC2 + 'bb');
+        ctx.fillStyle = tint;
+        ctx.fillRect(0, 0, W, H);
+      } else {
+        const alpha = parseInt(document.getElementById('overlay-opacity').value) / 100;
+        ctx.fillStyle = `rgba(0,0,0,${alpha * 0.45})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      // Route text
+      const from = [post.from_city, post.from_area].filter(Boolean).join(', ') || '?';
+      const to   = [post.to_city,   post.to_area  ].filter(Boolean).join(', ') || '?';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.font = '600 12px system-ui,sans-serif';
+      ctx.fillText('TRAJET', W / 2, 48);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 30px system-ui,sans-serif';
+      ctx.fillText(from + '  →  ' + to, W / 2, 90);
+
+      // Info chips
+      const chips = [];
+      if (post.post_date) chips.push('📅 ' + post.post_date + (post.post_time ? ' ' + post.post_time : ''));
+      if (post.preferred_departure_time) chips.push('🕐 ' + post.preferred_departure_time);
+      if (post.price) chips.push('💰 ' + post.price);
+      if (post.nr_passengers) chips.push('👥 ' + post.nr_passengers);
+      let chipX = 24;
+      const chipY = 138;
+      ctx.font = '13px system-ui,sans-serif';
+      ctx.textAlign = 'left';
+      chips.forEach(chip => {
+        const tw = ctx.measureText(chip).width;
+        const pad = 10, bh = 26, bx = chipX - pad, by = chipY - 19;
+        ctx.fillStyle = 'rgba(255,255,255,0.13)';
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(bx, by, tw + pad * 2, bh, 6);
+        else ctx.rect(bx, by, tw + pad * 2, bh);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.88)';
+        ctx.fillText(chip, chipX, chipY);
+        chipX += tw + pad * 2 + 8;
+      });
+
+      // Profile name bottom-left
+      ctx.textAlign = 'left';
+      ctx.font = '12px system-ui,sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.fillText(post.profile_name || '', 24, H - 18);
+
+      // Offer/demand badge top-right
+      if (post.offer_or_demand) {
+        ctx.textAlign = 'right';
+        ctx.font = 'bold 10px system-ui,sans-serif';
+        ctx.fillStyle = post.offer_or_demand === 'offer'
+          ? 'rgba(52,211,153,0.9)' : 'rgba(251,191,36,0.9)';
+        ctx.fillText(post.offer_or_demand.toUpperCase(), W - 20, 24);
+      }
+
+      // Watermark
+      ctx.textAlign = 'right';
+      ctx.font = '11px system-ui,sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.22)';
+      ctx.fillText('covoiturage.tn', W - 20, H - 18);
+    }
+
+    function setCardColor(el) {
+      document.querySelectorAll('.modal-color-btn').forEach(b => b.classList.remove('active'));
+      el.classList.add('active');
+      _cardC1 = el.dataset.c1;
+      _cardC2 = el.dataset.c2;
+      redrawCanvas();
+    }
+
+    function setCanvasBgImage(input) {
+      const file = input.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = new Image();
+        img.onload = () => { _canvasBgImage = img; redrawCanvas(); };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function downloadCard() {
+      const canvas = document.getElementById('modal-canvas');
+      canvas.toBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        const fr = (_modalPost && _modalPost.from_city ? _modalPost.from_city : 'post').replace(/\s+/g, '_');
+        const to = (_modalPost && _modalPost.to_city   ? _modalPost.to_city   : '').replace(/\s+/g, '_');
+        a.download = 'ride-' + fr + '-' + to + '-' + Date.now() + '.png';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      });
+    }
+
     function showPostDetail(idx) {
       const post = (window._displayedPosts || currentPosts)[idx];
       if (!post) return;
       _modalPost = post;
-
-      // ── Populate visual card ────────────────────────────────────────────
-      const from = [post.from_city, post.from_area].filter(Boolean).join(', ') || '?';
-      const to   = [post.to_city,   post.to_area  ].filter(Boolean).join(', ') || '?';
-      document.getElementById('modal-from').textContent = from;
-      document.getElementById('modal-to').textContent   = to;
-      document.getElementById('modal-card-name').textContent = post.profile_name || '';
-
-      const badge = document.getElementById('modal-card-badge');
-      badge.textContent = post.offer_or_demand || '';
-      badge.style.background = post.offer_or_demand === 'offer'
-        ? 'rgba(52,211,153,0.25)' : post.offer_or_demand === 'demand'
-        ? 'rgba(251,191,36,0.25)' : 'rgba(255,255,255,0.12)';
-
-      const chips = [];
-      if (post.post_date || post.post_time)
-        chips.push(['📅', `${post.post_date || ''} ${post.post_time || ''}`.trim()]);
-      if (post.preferred_departure_time) chips.push(['🕐', post.preferred_departure_time]);
-      if (post.price)      chips.push(['💰', post.price]);
-      if (post.nr_passengers) chips.push(['👥', post.nr_passengers]);
-      if (post.gender)     chips.push(['👤', post.gender]);
-      document.getElementById('modal-chips').innerHTML = chips
-        .map(([ic, val]) => `<div class="modal-chip">${ic} ${escapeHtml(String(val))}</div>`)
-        .join('');
-
-      // ── Populate fields ─────────────────────────────────────────────────
       _renderModalFields(post, document.getElementById('modal-show-text').checked);
       document.getElementById('post-modal').classList.add('open');
+      requestAnimationFrame(redrawCanvas);
     }
 
     function _renderModalFields(post, showText) {
@@ -1376,12 +1478,6 @@
       if (_modalPost) _renderModalFields(_modalPost, document.getElementById('modal-show-text').checked);
     }
 
-    function setCardBg(el) {
-      document.querySelectorAll('.modal-color-btn').forEach(b => b.classList.remove('active'));
-      el.classList.add('active');
-      document.getElementById('modal-card').style.setProperty('--card-bg', el.dataset.bg);
-      document.getElementById('modal-card').style.background = el.dataset.bg;
-    }
 
     function closeModal() {
       document.getElementById('post-modal').classList.remove('open');

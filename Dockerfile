@@ -1,8 +1,7 @@
 FROM mcr.microsoft.com/playwright/python:v1.58.0
-
 WORKDIR /app
 
-# Install scraper + API Python dependencies
+# Install dependencies
 COPY requirements.txt /tmp/scraper-requirements.txt
 COPY api/requirements.txt /tmp/api-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/scraper-requirements.txt -r /tmp/api-requirements.txt
@@ -10,9 +9,10 @@ RUN pip install --no-cache-dir -r /tmp/scraper-requirements.txt -r /tmp/api-requ
 # Copy project files
 COPY . .
 
-# api/posts.db → mount a Coolify volume at /app/api for DB persistence
-# facebook_auth.json → upload via /auth/upload in the dashboard
+# Keep a pristine image copy of api/ so entrypoint can sync it into the volume
+RUN cp -r /app/api /app/api.image
 
 EXPOSE 8000
-
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+CMD ["/entrypoint.sh"]

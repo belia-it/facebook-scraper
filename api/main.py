@@ -650,6 +650,14 @@ async def auth_key(key: str = Form(...)):
     await _login_page.keyboard.press(key)
     return {"ok": True}
 
+@app.post("/api/auth/navigate")
+async def auth_navigate(url: str = Form(...)):
+    if _login_page is None:
+        raise HTTPException(404, "No active login session")
+    await _login_page.goto(url, wait_until="domcontentloaded", timeout=15000)
+    return {"ok": True}
+
+
 @app.post("/api/auth/receive-cookies")
 async def receive_cookies(request: Request):
     """Receive cookies POSTed from the user's local browser via the capture command."""

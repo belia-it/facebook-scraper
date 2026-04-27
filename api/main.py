@@ -650,6 +650,14 @@ async def auth_key(key: str = Form(...)):
     await _login_page.keyboard.press(key)
     return {"ok": True}
 
+@app.post("/api/auth/evaluate")
+async def auth_evaluate(script: str = Form(...)):
+    if _login_page is None:
+        raise HTTPException(404, "No active login session")
+    result = await _login_page.evaluate(script)
+    return {"ok": True, "result": str(result) if result is not None else None}
+
+
 @app.post("/api/auth/navigate")
 async def auth_navigate(url: str = Form(...)):
     if _login_page is None:
